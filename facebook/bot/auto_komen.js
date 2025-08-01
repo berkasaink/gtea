@@ -37,7 +37,7 @@ async function shouldSkip(post) {
   return await post.evaluate(el => {
     const txt = el.innerText.toLowerCase();
     if (!txt || txt.length < 5) return 'Tidak ada teks';
-    if (['disponsori','sponsored','iklan','ads','ysl','promo','beauty'].some(w => txt.includes(w))) return 'Iklan';
+    if (['disponsori','sponsored','iklan','ads','promo','beauty','ysl'].some(w => txt.includes(w))) return 'Iklan';
     if (txt.includes('anda') || txt.includes('your profile') || txt.includes('kamu')) return 'Postingan sendiri';
     return null;
   });
@@ -63,13 +63,11 @@ async function clickCommentButton(post) {
 }
 
 async function findCommentBox(page) {
-  // ✅ Cari beberapa selector alternatif
   const selectors = [
     'div[contenteditable="true"][data-lexical-editor="true"]',
     'div[aria-label="Tulis komentar"]',
     'div[role="textbox"][contenteditable="true"]'
   ];
-
   for (const sel of selectors) {
     const box = await page.$(sel);
     if (box) return box;
@@ -84,16 +82,8 @@ async function typeComment(page, text) {
   try {
     await box.focus();
     await randomDelay(1000, 2000);
-
-    // ✅ Coba ketik hingga 3x
-    for (let i = 0; i < 3; i++) {
-      await page.keyboard.type(text, { delay: 80 });
-      await sleep(1000);
-      const typedOK = await page.evaluate(el => el.innerText.length > 3, box);
-      if (typedOK) break;
-      console.log('⚠️ Teks belum masuk, ketik ulang...');
-    }
-
+    await page.keyboard.type(text, { delay: 80 });
+    await sleep(1500);
     await page.keyboard.press('Enter');
     await randomDelay(3000, 5000);
     return true;
@@ -103,7 +93,7 @@ async function typeComment(page, text) {
 }
 
 async function autoComment(page) {
-  console.log('[TEST] Menjalankan auto_komen.js Fix 33 Modular');
+  console.log('[TEST] Menjalankan auto_komen.js Fix 34 Modular');
 
   const history = loadHistory();
   const commented = new Set(history);
@@ -131,14 +121,22 @@ async function autoComment(page) {
 
       console.log(`🎯 [${batch + 1}-${i + 1}] ${text.slice(0, 60).replace(/\n/g, ' ')}...`);
 
-      // ✅ Hanya log sekali
       const aiComment = await getAIComment(text);
-      if (!aiComment) { console.log(`⚠️ [${batch + 1}-${i + 1}] Gagal generate komentar AI`); await sleep(3000); continue; }
+      if (!aiComment) {
+        console.log(`⚠️ [${batch + 1}-${i + 1}] Gagal generate komentar AI`);
+        saveHistory(uid); // ✅ simpan UID walau gagal generate agar tidak spam
+        await sleep(2000);
+        continue;
+      }
 
       console.log(`💬 Komentar AI: ${aiComment}`);
 
       const clicked = await clickCommentButton(post);
-      if (!clicked) { console.log(`⚠️ [${batch + 1}-${i + 1}] Tombol komentar tidak ditemukan`); continue; }
+      if (!clicked) {
+        console.log(`⚠️ [${batch + 1}-${i + 1}] Tombol komentar tidak ditemukan`);
+        saveHistory(uid);
+        continue;
+      }
 
       const success = await typeComment(page, aiComment);
       if (success) {
@@ -149,6 +147,7 @@ async function autoComment(page) {
         if (count >= 2) { console.log('✅ Sesi selesai.'); return true; }
       } else {
         console.log(`❌ [${batch + 1}-${i + 1}] Gagal mengetik komentar`);
+        saveHistory(uid); // ✅ walau gagal ketik tetap disimpan agar tidak diulang
       }
 
       await randomDelay(4000, 7000);

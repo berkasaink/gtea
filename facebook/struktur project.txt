@@ -1,0 +1,35 @@
+facebook-bot/
+├── index.js     #script Utama
+├── cookies.json #cookies dari EditThisCookies
+├── api_key.json # daftar api key
+├── bot/
+│   └── auto_komen.js
+│   └── auto_replay.js
+│   └── auto_like.js
+│   └── auto_visit.js
+├── modules/
+│   ├── browser.js     # handle Puppeteer & rotasi cookies
+│   ├── openrouter.js  # koneksi OpenRouter + rotasi API key
+│   └── logger.js      # logging + auto hapus
+├── logs/
+    └── auto_komen.log
+    └── auto_replay.log
+    └── auto_like.log
+    └── auto_visit.log
+
+supaya bisa konsisten dalam membuat project nya maka semua scrpt akan diakhiri dengan nama fix (angka) missal index.js fix 01, auto_komen.js fix 01, auto_like.js fix 01 dst..
+
+fitur bot :
+1. semua log akan dihapus jika postingan sudah mencapai 1000 postingan
+2. komntar sepenuhnya dihandle oleh api openrouter
+3. gunakan delay pendek jika gagal melakukan aksi dan gunakan delay acak 5-30 detik untuk aksi yang sukses
+4. auto replace cookies secara acak antara 30-240 detik
+5. menggunakan api key lebih dari 1, tujuannya jika api key limit maka otomatis menggunakan api key yang masih ada kuotanya
+6. tidak boleh komentar, like dan mengunjungi profile yang sama
+7. target komentar dan like postingan terbaru dibawah 24jam
+8. loop aksi acak, missal awal menjalankan auto_komen.js, auto_replay.js dst.. maka Ketika loop akan melakukan aksi auto_replay.js, auto_like.js dst...
+9. lewati postingan iklan/Bersponsor dan postingan lama
+10. khusus untuk auto_replay.js memeriksa balasan hingga 10 komentar terbaru, jika sudah membalas 10 komentar terbaru maka bisa pindah aksi, kecuali sudah cek dan tidak ada komentar baru sampe 10x scroll notifikasi baru bisa pindah aksi.
+
+silahkan anda kirim seluruh file dengan inisial yang sudah saya katakana diatas secara lengkap jika anda sudah memahami maksud saya.
+dan tolong diingat, kerjakan project ini secara konsisten, berikan script yang work ditahun 2025 ini.

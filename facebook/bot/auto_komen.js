@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { getAIComment } = require('../modules/openrouter.js');
+const { getAIComment } = require('../modules/openrouter.js'); // ✅ harus return string AI
 const { logAction } = require('../modules/logger.js');
 
 const HISTORY_FILE = path.resolve(__dirname, '../logs/commented_posts.json');
@@ -18,7 +18,7 @@ function saveHistory(uid) {
 }
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-function randomDelay(min = 2000, max = 4000) { return sleep(Math.floor(Math.random() * (max - min) + min)); }
+function randomDelay(min = 3000, max = 6000) { return sleep(Math.floor(Math.random() * (max - min) + min)); }
 
 async function isPostRecent(post) {
   return await post.evaluate(el => {
@@ -37,8 +37,7 @@ async function shouldSkip(post) {
   return await post.evaluate(el => {
     const txt = el.innerText.toLowerCase();
     if (!txt || txt.length < 5) return 'Tidak ada teks';
-    const isIklan = ['disponsori', 'sponsored', 'iklan', 'ads'].some(word => txt.includes(word));
-    if (isIklan) return 'Iklan';
+    if (['disponsori','sponsored','iklan','ads','grammarly','7-eleven'].some(w => txt.includes(w))) return 'Iklan';
     if (txt.includes('anda') || txt.includes('your profile') || txt.includes('kamu')) return 'Postingan sendiri';
     return null;
   });
@@ -47,7 +46,7 @@ async function shouldSkip(post) {
 async function clickCommentButton(post) {
   try {
     await post.evaluate(el => el.scrollIntoView({ behavior: 'smooth', block: 'center' }));
-    await randomDelay(800, 1500);
+    await randomDelay(2000, 4000);
 
     const clicked = await post.evaluate(() => {
       const btn = Array.from(document.querySelectorAll('div[role="button"] span')).find(b => /oment/i.test(b.innerText));
@@ -63,9 +62,10 @@ async function clickCommentButton(post) {
 async function typeComment(page, box, text) {
   try {
     await box.focus();
+    await randomDelay(1000, 2000);
     let typed = false;
     for (let i = 0; i < 3; i++) {
-      await page.keyboard.type(text, { delay: 80 });
+      await page.keyboard.type(text, { delay: 100 });
       await sleep(1500);
       const typedText = await page.evaluate(el => el.innerText, box);
       if (typedText.includes(text.slice(0, 5))) { typed = true; break; }
@@ -73,78 +73,80 @@ async function typeComment(page, box, text) {
     }
     if (!typed) return false;
     await page.keyboard.press('Enter');
-    await sleep(2000);
+    await randomDelay(4000, 7000);
     return true;
   } catch { return false; }
 }
 
+async function generateAIComment(content) {
+  for (let i = 1; i <= 3; i++) {
+    try {
+      const comment = await getAIComment(content);
+      if (comment && comment.length > 4) return comment;
+    } catch (err) {
+      console.log(`⚠️ API OpenRouter gagal attempt ${i}: ${err.message}`);
+      await sleep(3000);
+    }
+  }
+  return null;
+}
+
 async function autoComment(page) {
-  console.log('[TEST] Menjalankan auto_komen.js Fix 27 Modular');
+  console.log('[TEST] Menjalankan auto_komen.js Fix 28 Modular');
 
   const history = loadHistory();
   const commented = new Set(history);
   let count = 0;
 
-  for (let batch = 0; batch < 10; batch++) {
-    console.log(`[WAIT] Scrolling batch ${batch + 1}...`);
-    await page.evaluate(() => window.scrollBy(0, 2000));
-    await randomDelay();
+  try {
+    for (let batch = 0; batch < 10; batch++) {
+      console.log(`[WAIT] Scrolling batch ${batch + 1}...`);
+      await page.evaluate(() => window.scrollBy(0, 2000));
+      await randomDelay();
 
-    const posts = await page.$$('[data-ad-preview="message"]');
-    console.log(`🔍 Batch ${batch + 1}: ${posts.length} postingan ditemukan`);
+      const posts = await page.$$('[data-ad-preview="message"]');
+      console.log(`🔍 Batch ${batch + 1}: ${posts.length} postingan ditemukan`);
 
-    for (let i = 0; i < posts.length; i++) {
-      const post = posts[i];
-      const text = await post.evaluate(el => el.innerText || '');
-      if (!text) continue;
+      for (let i = 0; i < posts.length; i++) {
+        const post = posts[i];
+        const text = await post.evaluate(el => el.innerText || '');
+        if (!text) continue;
 
-      const uid = crypto.createHash('sha1').update(text.slice(0, 100)).digest('hex');
-      if (commented.has(uid)) continue;
-      if (!(await isPostRecent(post))) continue;
+        const uid = crypto.createHash('sha1').update(text.slice(0, 100)).digest('hex');
+        if (commented.has(uid)) continue;
+        if (!(await isPostRecent(post))) continue;
 
-      const skipReason = await shouldSkip(post);
-      if (skipReason) {
-        console.log(`⏭️ [${batch + 1}-${i + 1}] ${skipReason}`);
-        continue;
-      }
+        const skipReason = await shouldSkip(post);
+        if (skipReason) { console.log(`⏭️ [${batch + 1}-${i + 1}] ${skipReason}`); continue; }
 
-      console.log(`🎯 [${batch + 1}-${i + 1}] ${text.slice(0, 60).replace(/\n/g, ' ')}...`);
+        console.log(`🎯 [${batch + 1}-${i + 1}] ${text.slice(0, 60).replace(/\n/g, ' ')}...`);
 
-      const aiComment = await getAIComment(text);
-      if (!aiComment || aiComment.length < 4) {
-        console.log(`⚠️ [${batch + 1}-${i + 1}] Gagal generate komentar AI`);
-        continue;
-      }
+        const aiComment = await generateAIComment(text);
+        if (!aiComment) { console.log(`⚠️ [${batch + 1}-${i + 1}] Gagal generate komentar AI`); continue; }
+        console.log(`💬 ${aiComment}`);
 
-      console.log(`💬 ${aiComment}`);
+        const clicked = await clickCommentButton(post);
+        if (!clicked) { console.log(`⚠️ [${batch + 1}-${i + 1}] Tombol komentar tidak ditemukan`); continue; }
 
-      const clicked = await clickCommentButton(post);
-      if (!clicked) {
-        console.log(`⚠️ [${batch + 1}-${i + 1}] Tombol komentar tidak ditemukan`);
-        continue;
-      }
+        const box = await page.$('div[contenteditable="true"][data-lexical-editor="true"]');
+        if (!box) { console.log(`⚠️ [${batch + 1}-${i + 1}] Kolom komentar tidak ditemukan`); continue; }
 
-      await randomDelay(3000);
-      const box = await page.$('div[contenteditable="true"][data-lexical-editor="true"]');
-      if (!box) {
-        console.log(`⚠️ [${batch + 1}-${i + 1}] Kolom komentar tidak ditemukan`);
-        continue;
-      }
-
-      const success = await typeComment(page, box, aiComment);
-      if (success) {
-        console.log(`✅ Komentar berhasil dikirim ke postingan [${batch + 1}-${i + 1}]`);
-        saveHistory(uid);
-        await logAction('auto_komen', aiComment);
-        count++;
-        if (count >= 2) {
-          console.log('✅ Sesi selesai.');
-          return true;
+        const success = await typeComment(page, box, aiComment);
+        if (success) {
+          console.log(`✅ Komentar berhasil dikirim ke postingan [${batch + 1}-${i + 1}]`);
+          saveHistory(uid);
+          await logAction('auto_komen', aiComment);
+          count++;
+          if (count >= 2) { console.log('✅ Sesi selesai.'); return true; }
+        } else {
+          console.log(`❌ [${batch + 1}-${i + 1}] Gagal mengetik komentar`);
         }
-      } else {
-        console.log(`❌ [${batch + 1}-${i + 1}] Gagal mengetik komentar`);
+
+        await randomDelay(3000, 6000); // ✅ jeda realistis antar posting
       }
     }
+  } catch (err) {
+    console.log(`❌ ERROR: ${err.message}`);
   }
 
   console.log('✅ Tidak ada postingan valid atau semua sudah dikomentari.');

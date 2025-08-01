@@ -1,0 +1,14 @@
+tampilan terminal :
+PS C:\Users\goenk\facebook> node index.js
+[INFO] Cookies berhasil di-rotate (1 cookie diterapkan).
+[INFO] Browser berhasil diluncurkan & cookies diterapkan.
+
+saya melihat browser ada dihalaman login facebook.
+diterminal masukan info seluruh aksi
+contoh :
+login berhasil...
+target komentar : isi komentar/cuplikan komentar
+balasan (jika auto replay) dan komentar (untuk auto komen)
+target like : cuplikan postingan
+target visit : nama akun facebook yang dikunjungi
+gagal/sukses aksi

@@ -11,24 +11,24 @@ const POST_SELECTORS = [
   'div[data-pagelet^="FeedUnit_"]'
 ];
 
-// ✅ Tambahkan selector teks terbaru & fallback
 const TEXT_SELECTORS = [
+  'div[data-testid="post_message"]',
   'div[data-ad-comet-preview="message"]',
   'div[data-ad-preview="message"]',
-  'div[data-testid="post_message"]',
   'div[dir="auto"]',
-  'div[role="article"] p',
   'span[dir="auto"]',
   'span[lang]',
   'div[data-lexical-text="true"]',
   'div[contenteditable="false"]'
 ];
 
+// ✅ Tambah selector tombol komentar terbaru
 const COMMENT_BUTTON_SELECTORS = [
-  'div[aria-label="Komentar"]',
-  'div[aria-label="Comment"]',
+  'div[aria-label*="omentar"]',
   'span:has-text("Komentar")',
-  'span:has-text("Comment")'
+  'span:has-text("Comment")',
+  'div[role="button"]:has(span)',
+  'div[role="button"]:has-text("Comment")'
 ];
 
 const COMMENT_BOX_SELECTORS = [
@@ -54,19 +54,16 @@ function saveHistory(postId) {
   }
 }
 
-// ✅ Ambil teks posting dengan fallback ke innerText
+// ✅ Ambil teks posting (fallback innerText + debug)
 async function extractText(post) {
   for (let s of TEXT_SELECTORS) {
     const text = await post.$eval(s, el => el.innerText.trim()).catch(() => '');
     if (text) return text;
   }
-
-  // 🔹 Fallback: ambil innerText seluruh post jika selector gagal
   const fallback = await post.evaluate(el => el.innerText.trim()).catch(() => '');
   if (fallback) return fallback;
 
-  // 🔹 Log debug HTML singkat agar tahu struktur DOM baru
-  const debug = await post.evaluate(el => el.innerHTML.slice(0, 120)).catch(() => 'no-html');
+  const debug = await post.evaluate(el => el.innerHTML.slice(0, 150)).catch(() => 'no-html');
   return `[NO_TEXT:${debug}]`;
 }
 
@@ -86,18 +83,36 @@ async function getPostId(post) {
   });
 }
 
-// ✅ Klik tombol komentar
-async function clickCommentButton(post) {
-  for (let sel of COMMENT_BUTTON_SELECTORS) {
-    try {
+// ✅ Klik tombol komentar (lebih agresif)
+async function clickCommentButton(post, page) {
+  try {
+    await post.evaluate(el => el.scrollIntoView({ behavior: 'smooth', block: 'center' }));
+    await randomDelay(800, 1500);
+
+    for (let sel of COMMENT_BUTTON_SELECTORS) {
       const btn = await post.$(sel);
-      if (btn) { await btn.click(); await randomDelay(); return true; }
-    } catch {}
-  }
+      if (btn) {
+        await btn.click().catch(() => {});
+        await randomDelay();
+        return true;
+      }
+    }
+
+    // 🔹 Fallback: cari tombol via JS di dalam post
+    const clicked = await post.evaluate(() => {
+      const btn = [...document.querySelectorAll('div[role="button"],span')].find(el =>
+        /omentar|Comment/i.test(el.innerText)
+      );
+      if (btn) { btn.click(); return true; }
+      return false;
+    });
+    if (clicked) { await randomDelay(); return true; }
+
+  } catch (e) { console.log('⚠️ ERROR klik tombol:', e.message); }
   return false;
 }
 
-// ✅ Cari kolom komentar dalam konteks posting
+// ✅ Cari kolom komentar dalam posting
 async function findCommentBox(post) {
   for (let sel of COMMENT_BOX_SELECTORS) {
     try {
@@ -119,7 +134,7 @@ async function typeComment(box, text) {
   } catch { return false; }
 }
 
-// ✅ Cek semua rule skip
+// ✅ Rule skip posting
 async function shouldSkip(post, postId, content, commented) {
   const rules = [
     { check: () => commented.has(postId), reason: 'Sudah dikomentari' },
@@ -128,7 +143,7 @@ async function shouldSkip(post, postId, content, commented) {
     { check: async () => await post.evaluate(el => el.innerText.includes('Anda') || el.innerText.includes('Your profile') || el.innerText.includes('Kamu')), reason: 'Postingan sendiri' },
     { check: async () => {
         let t = await post.$eval('a abbr,a time', el => el.getAttribute('datetime')).catch(() => null);
-        if (!t) return false; // ✅ jangan skip jika waktu tidak terbaca
+        if (!t) return false; // ✅ jangan skip jika tidak terbaca
         let jam = (Date.now() - new Date(t).getTime()) / 3600000;
         return jam >= 24;
       }, reason: 'Postingan lama' }
@@ -143,7 +158,7 @@ async function shouldSkip(post, postId, content, commented) {
 
 // ✅ MAIN
 async function autoComment(page, browser) {
-  console.log('[TEST] Menjalankan auto_komen.js Fix 23');
+  console.log('[TEST] Menjalankan auto_komen.js Fix 24');
   let sessionDone = false;
 
   try {
@@ -177,7 +192,7 @@ async function autoComment(page, browser) {
         const aiComment = await getAIComment(content);
         console.log(`💬 ${aiComment}`);
 
-        const clicked = await clickCommentButton(post);
+        const clicked = await clickCommentButton(post, page);
         if (!clicked) { console.log(`⚠️ [${batch + 1}-${i + 1}] Tombol komentar tidak ditemukan`); continue; }
 
         const box = await findCommentBox(post);

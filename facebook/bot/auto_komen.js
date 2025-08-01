@@ -4,6 +4,7 @@ const { getAIComment } = require('../modules/openrouter.js');
 const { logAction } = require('../modules/logger.js');
 
 const HISTORY_FILE = path.resolve(__dirname, '../logs/commented_posts.json');
+const DEBUG_HTML_FILE = path.resolve(__dirname, '../logs/debug_posts.html');
 
 const POST_SELECTORS = [
   'div[role="article"]',
@@ -22,13 +23,11 @@ const TEXT_SELECTORS = [
   'div[contenteditable="false"]'
 ];
 
-// ✅ Tambah selector tombol komentar terbaru
 const COMMENT_BUTTON_SELECTORS = [
   'div[aria-label*="omentar"]',
-  'span:has-text("Komentar")',
-  'span:has-text("Comment")',
-  'div[role="button"]:has(span)',
-  'div[role="button"]:has-text("Comment")'
+  'div[role="button"][aria-label*="omentar"]',
+  'div[role="button"]',
+  'div[aria-label*="Comment"]'
 ];
 
 const COMMENT_BOX_SELECTORS = [
@@ -54,17 +53,27 @@ function saveHistory(postId) {
   }
 }
 
-// ✅ Ambil teks posting (fallback innerText + debug)
-async function extractText(post) {
-  for (let s of TEXT_SELECTORS) {
-    const text = await post.$eval(s, el => el.innerText.trim()).catch(() => '');
-    if (text) return text;
-  }
-  const fallback = await post.evaluate(el => el.innerText.trim()).catch(() => '');
-  if (fallback) return fallback;
+// ✅ Simpan debug HTML posting gagal
+async function saveDebugHTML(html) {
+  fs.appendFileSync(DEBUG_HTML_FILE, `<hr><pre>${html}</pre>\n`);
+}
 
-  const debug = await post.evaluate(el => el.innerHTML.slice(0, 150)).catch(() => 'no-html');
-  return `[NO_TEXT:${debug}]`;
+// ✅ Ambil teks posting dengan fallback innerText total
+async function extractText(post) {
+  try {
+    for (let s of TEXT_SELECTORS) {
+      const text = await post.$eval(s, el => el.innerText.trim()).catch(() => '');
+      if (text) return text;
+    }
+    const fullText = await post.evaluate(el => el.innerText.trim()).catch(() => '');
+    if (fullText) return fullText;
+
+    const debug = await post.evaluate(el => el.outerHTML.slice(0, 300)).catch(() => 'no-html');
+    await saveDebugHTML(debug);
+    return `[NO_TEXT:${debug}]`;
+  } catch (e) {
+    return `[NO_TEXT:ERROR:${e.message}]`;
+  }
 }
 
 // ✅ Ambil ID unik posting
@@ -83,12 +92,13 @@ async function getPostId(post) {
   });
 }
 
-// ✅ Klik tombol komentar (lebih agresif)
-async function clickCommentButton(post, page) {
+// ✅ Klik tombol komentar (tanpa :has-text())
+async function clickCommentButton(post) {
   try {
     await post.evaluate(el => el.scrollIntoView({ behavior: 'smooth', block: 'center' }));
     await randomDelay(800, 1500);
 
+    // Cari tombol dari selector biasa
     for (let sel of COMMENT_BUTTON_SELECTORS) {
       const btn = await post.$(sel);
       if (btn) {
@@ -98,7 +108,7 @@ async function clickCommentButton(post, page) {
       }
     }
 
-    // 🔹 Fallback: cari tombol via JS di dalam post
+    // Fallback: cari element berdasarkan innerText
     const clicked = await post.evaluate(() => {
       const btn = [...document.querySelectorAll('div[role="button"],span')].find(el =>
         /omentar|Comment/i.test(el.innerText)
@@ -108,11 +118,13 @@ async function clickCommentButton(post, page) {
     });
     if (clicked) { await randomDelay(); return true; }
 
-  } catch (e) { console.log('⚠️ ERROR klik tombol:', e.message); }
+  } catch (e) {
+    console.log(`⚠️ ERROR klik tombol komentar: ${e.message}`);
+  }
   return false;
 }
 
-// ✅ Cari kolom komentar dalam posting
+// ✅ Cari kolom komentar di dalam posting
 async function findCommentBox(post) {
   for (let sel of COMMENT_BOX_SELECTORS) {
     try {
@@ -143,7 +155,7 @@ async function shouldSkip(post, postId, content, commented) {
     { check: async () => await post.evaluate(el => el.innerText.includes('Anda') || el.innerText.includes('Your profile') || el.innerText.includes('Kamu')), reason: 'Postingan sendiri' },
     { check: async () => {
         let t = await post.$eval('a abbr,a time', el => el.getAttribute('datetime')).catch(() => null);
-        if (!t) return false; // ✅ jangan skip jika tidak terbaca
+        if (!t) return false;
         let jam = (Date.now() - new Date(t).getTime()) / 3600000;
         return jam >= 24;
       }, reason: 'Postingan lama' }
@@ -158,7 +170,7 @@ async function shouldSkip(post, postId, content, commented) {
 
 // ✅ MAIN
 async function autoComment(page, browser) {
-  console.log('[TEST] Menjalankan auto_komen.js Fix 24');
+  console.log('[TEST] Menjalankan auto_komen.js Fix 25');
   let sessionDone = false;
 
   try {
@@ -192,7 +204,7 @@ async function autoComment(page, browser) {
         const aiComment = await getAIComment(content);
         console.log(`💬 ${aiComment}`);
 
-        const clicked = await clickCommentButton(post, page);
+        const clicked = await clickCommentButton(post);
         if (!clicked) { console.log(`⚠️ [${batch + 1}-${i + 1}] Tombol komentar tidak ditemukan`); continue; }
 
         const box = await findCommentBox(post);

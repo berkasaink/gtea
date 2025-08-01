@@ -22,12 +22,18 @@ const TEXT_SELECTORS = [
   'div[data-ad-comet-preview="message"]'
 ];
 
+const COMMENT_BUTTON_SELECTORS = [
+  'div[aria-label="Komentar"]',
+  'div[aria-label="Comment"]',
+  'span:has-text("Komentar")',
+  'span:has-text("Comment")'
+];
+
 const COMMENT_BOX_SELECTORS = [
   'div[aria-label="Tulis komentar"]',
   'div[aria-label="Write a comment"]',
-  'div[contenteditable="true"][data-lexical-editor="true"]',
   'div[role="textbox"][contenteditable="true"]',
-  'div[data-lexical-text="true"][contenteditable="true"]',
+  'div[contenteditable="true"][data-lexical-editor="true"]',
   'div.notranslate[contenteditable="true"]'
 ];
 
@@ -46,17 +52,16 @@ function saveHistory(postId) {
   }
 }
 
-// ✅ Ambil teks posting dengan log debug
+// 🔹 Ambil teks posting
 async function extractText(post) {
   for (let s of TEXT_SELECTORS) {
     const text = await post.$eval(s, el => el.innerText.trim()).catch(() => '');
     if (text && text.length > 5) return text;
   }
-  const debug = await post.evaluate(el => el.innerHTML.slice(0, 40)).catch(() => 'no-html');
-  return `[NO_TEXT:${debug}]`;
+  return '[NO_TEXT]';
 }
 
-// ✅ Ambil ID unik posting
+// 🔹 Ambil ID unik posting
 async function getPostId(post) {
   return await post.evaluate(el => {
     let ft = el.getAttribute('data-ft') || '';
@@ -72,47 +77,51 @@ async function getPostId(post) {
   });
 }
 
-// ✅ Klik tombol komentar
+// 🔹 Klik tombol komentar (lebih fleksibel)
 async function clickCommentButton(post) {
-  try {
-    const btn = await post.$('div[aria-label="Komentar"],div[aria-label="Comment"]');
-    if (btn) { await btn.click(); await randomDelay(); return true; }
-    return false;
-  } catch { return false; }
+  for (let sel of COMMENT_BUTTON_SELECTORS) {
+    try {
+      const btn = await post.$(sel);
+      if (btn) { await btn.click(); await randomDelay(); return true; }
+    } catch {}
+  }
+  return false;
 }
 
-// ✅ Cari kolom komentar spesifik
-async function findCommentBox(page) {
+// 🔹 Cari kolom komentar hanya di dalam posting ini
+async function findCommentBox(post) {
   for (let sel of COMMENT_BOX_SELECTORS) {
     try {
-      const box = await page.waitForSelector(sel, { timeout: 4000 });
+      const box = await post.$(sel);
       if (box) return box;
     } catch {}
   }
   return null;
 }
 
-// ✅ Ketik komentar
-async function typeComment(page, box, text) {
+// 🔹 Ketik komentar
+async function typeComment(box, text) {
   try {
     await box.focus();
-    await page.keyboard.type(text, { delay: 60 });
-    await page.keyboard.press('Enter');
+    await box.type(text, { delay: 60 });
+    await box.press('Enter');
     await sleep(1500);
     return true;
   } catch { return false; }
 }
 
-// ✅ Cek semua rule skip
+// 🔹 Cek semua rule skip
 async function shouldSkip(post, postId, content, commented) {
   const rules = [
     { check: () => commented.has(postId), reason: 'Sudah dikomentari' },
     { check: () => content.startsWith('[NO_TEXT'), reason: 'Tidak ada teks' },
     { check: async () => await post.evaluate(el => el.innerText.includes('Disponsori') || el.innerText.includes('Sponsored')), reason: 'Iklan' },
-    { check: async () => await post.evaluate(el => el.innerText.includes('Anda') || el.innerText.includes('Your profile')), reason: 'Postingan sendiri' },
+    { check: async () => await post.evaluate(el => el.innerText.includes('Anda') || el.innerText.includes('Your profile') || el.innerText.includes('Kamu')), reason: 'Postingan sendiri' },
     { check: async () => {
         let t = await post.$eval('a abbr,a time', el => el.getAttribute('datetime')).catch(() => null);
-        return t && (Date.now() - new Date(t).getTime()) / 3600000 >= 24;
+        if (!t) return true; // skip jika tidak bisa baca waktu
+        let jam = (Date.now() - new Date(t).getTime()) / 3600000;
+        return jam >= 24;
       }, reason: 'Postingan lama' }
   ];
 
@@ -123,9 +132,9 @@ async function shouldSkip(post, postId, content, commented) {
   return null;
 }
 
-// ✅ MAIN
+// 🔹 MAIN
 async function autoComment(page, browser) {
-  console.log('[TEST] Menjalankan auto_komen.js Fix 21');
+  console.log('[TEST] Menjalankan auto_komen.js Fix 22');
   let sessionDone = false;
 
   try {
@@ -159,14 +168,13 @@ async function autoComment(page, browser) {
         const aiComment = await getAIComment(content);
         console.log(`💬 ${aiComment}`);
 
-        // Klik komentar → pastikan kolom terbuka untuk posting ini
         const clicked = await clickCommentButton(post);
-        if (!clicked) console.log(`⚠️ [${batch + 1}-${i + 1}] Tombol komentar tidak ditemukan`);
+        if (!clicked) { console.log(`⚠️ [${batch + 1}-${i + 1}] Tombol komentar tidak ditemukan`); continue; }
 
-        const box = await findCommentBox(page);
+        const box = await findCommentBox(post);
         if (!box) { console.log(`⚠️ [${batch + 1}-${i + 1}] Kolom komentar tidak ditemukan`); continue; }
 
-        const success = await typeComment(page, box, aiComment);
+        const success = await typeComment(box, aiComment);
         if (success) {
           console.log(`✅ Komentar berhasil dikirim ke postingan [${batch + 1}-${i + 1}]`);
           saveHistory(postId);
@@ -177,20 +185,19 @@ async function autoComment(page, browser) {
 
           if (count >= 2) {
             console.log('✅ Sesi selesai.');
-            console.log('[SUKSES] auto_komen berhasil dijalankan!');
             sessionDone = true;
-            if (browser) await browser.close();
-            return true;
+            break;
           }
         } else {
           console.log(`❌ [${batch + 1}-${i + 1}] Gagal mengetik komentar`);
         }
       }
+      if (sessionDone) break;
     }
 
-    console.log('✅ Tidak ada postingan valid atau semua sudah dikomentari.');
-    if (!sessionDone) console.log('[SUKSES] auto_komen berhasil dijalankan!');
+    if (!sessionDone) console.log('✅ Tidak ada postingan valid atau semua sudah dikomentari.');
     if (browser) await browser.close();
+    console.log('[SUKSES] auto_komen selesai.');
     return true;
 
   } catch (e) {

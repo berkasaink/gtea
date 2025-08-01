@@ -26,6 +26,7 @@ if (fs.existsSync(logPath)) {
   fs.writeFileSync(logPath, '[]');
 }
 
+// === Fungsi log lokal ===
 function saveLog(id) {
   if (!logData.includes(id)) {
     logData.push(id);
@@ -33,14 +34,10 @@ function saveLog(id) {
     fs.writeFileSync(logPath, JSON.stringify(logData, null, 2));
   }
 }
-
-function isLogged(id) {
-  return logData.includes(id);
-}
-
+function isLogged(id) { return logData.includes(id); }
 const delay = ms => new Promise(res => setTimeout(res, ms));
 
-export async function autoComment(page, browser) {
+export async function autoComment(page, browser = null) {
   console.log('[WAIT] Scrolling batch 1...');
 
   let batch = 1;
@@ -74,8 +71,9 @@ export async function autoComment(page, browser) {
 
       console.log(`🎯 [${batch}-${i + 1}] ${text.slice(0, 60).replace(/\n/g, ' ')}...`);
 
+      // ✅ Ambil komentar dari AI
       const comment = await getAIComment(text);
-      if (!comment) {
+      if (!comment || comment.startsWith('[AI_ERROR_400]')) {  // filter error AI 400
         console.log(`⚠️ [${batch}-${i + 1}] Gagal generate komentar AI`);
         continue;
       }
@@ -151,14 +149,10 @@ export async function autoComment(page, browser) {
     }
   }
 
-  // ✅ Setelah sukses, tutup browser dan akhiri script
-  if (success) {
-    console.log('✅ Semua komentar selesai. Menutup browser...');
+  // ✅ Exit behavior hanya jika browser ada
+  if (browser) {
+    console.log(success ? '✅ Semua komentar selesai. Menutup browser...' : '⚠️ Tidak ada komentar yang terkirim. Menutup browser...');
     await browser.close();
-    process.exit(0);
-  } else {
-    console.log('⚠️ Tidak ada komentar yang terkirim. Menutup browser...');
-    await browser.close();
-    process.exit(1);
   }
+  process.exit(success ? 0 : 1);
 }

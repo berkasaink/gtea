@@ -1,5 +1,5 @@
 # ==============================
-#  Autopush Git untuk Windows (PowerShell) - Final Version
+#  Autopush Git untuk Windows (PowerShell) - Final Version with Pull Update
 # ==============================
 
 # Konfigurasi
@@ -125,6 +125,14 @@ function Lihat-Status {
     git status
 }
 
+# ===== Tarik Update dari GitHub =====
+function Pull-Update {
+    Write-Host "`n=== Menarik Update dari GitHub ==="
+    Set-Location $RepoDir
+    git pull origin $Branch
+    Write-Host "`n✅ Update dari GitHub berhasil diambil!"
+}
+
 # ===== MENU UTAMA =====
 while ($true) {
     Write-Host ""
@@ -134,7 +142,8 @@ while ($true) {
     Write-Host "3. Full backup"
     Write-Host "4. Lihat status"
     Write-Host "5. Keluar"
-    $menu = Read-Host "Pilih menu [1-5]"
+    Write-Host "6. Tarik update dari GitHub"
+    $menu = Read-Host "Pilih menu [1-6]"
 
     switch ($menu) {
         1 { Push-File }
@@ -142,6 +151,7 @@ while ($true) {
         3 { Full-Backup }
         4 { Lihat-Status }
         5 { Write-Host "Keluar..."; break }
+        6 { Pull-Update }
         default { Write-Host "Pilihan tidak valid" }
     }
 }

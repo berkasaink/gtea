@@ -1,161 +1,164 @@
-const fs = require('fs');
-const path = require('path');
-const crypto = require('crypto');
-const { getAIComment } = require('../modules/openrouter.js');
-const { logAction } = require('../modules/logger.js');
+import { getAIComment } from '../modules/openrouter.js';
+import fs from 'fs';
+import path from 'path';
+import crypto from 'crypto';
+import { fileURLToPath } from 'url';
 
-const HISTORY_FILE = path.resolve(__dirname, '../logs/commented_posts.json');
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-function loadHistory() {
-  return fs.existsSync(HISTORY_FILE) ? JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf8')) : [];
-}
-function saveHistory(uid) {
-  const h = loadHistory();
-  if (!h.includes(uid)) {
-    h.push(uid);
-    fs.writeFileSync(HISTORY_FILE, JSON.stringify(h.slice(-1000), null, 2));
-  }
-}
+// === Lokasi file log khusus auto_komen ===
+const logPath = path.resolve(__dirname, '../logs/auto_komen.log');
 
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-function randomDelay(min = 4000, max = 7000) { return sleep(Math.floor(Math.random() * (max - min) + min)); }
-
-async function isPostRecent(post) {
-  return await post.evaluate(el => {
-    const t = el.querySelector('abbr,time,span[aria-hidden="false"],a[aria-label]');
-    if (!t) return true;
-    const raw = (t.getAttribute('data-utime') || t.getAttribute('datetime') || t.innerText || '').toLowerCase();
-    if (/^\d+$/.test(raw)) return (Date.now() - new Date(parseInt(raw) * 1000).getTime()) < 86400000;
-    if (/\d{4}-\d{2}-\d{2}/.test(raw)) return (Date.now() - new Date(raw).getTime()) < 86400000;
-    if (raw.includes('menit') || raw.includes('minute') || raw.includes('jam') || raw.includes('hour') || raw.includes('kemarin') || raw.includes('yesterday')) return true;
-    if (raw.includes('hari')) { const m = raw.match(/(\d+)/); if (m && parseInt(m[1]) >= 2) return false; }
-    return true;
-  });
-}
-
-async function shouldSkip(post) {
-  return await post.evaluate(el => {
-    const txt = el.innerText.toLowerCase();
-    if (!txt || txt.length < 5) return 'Tidak ada teks';
-    if (['disponsori','sponsored','iklan','ads','promo','beauty','ysl'].some(w => txt.includes(w))) return 'Iklan';
-    if (txt.includes('anda') || txt.includes('your profile') || txt.includes('kamu')) return 'Postingan sendiri';
-    return null;
-  });
-}
-
-async function clickCommentButton(post) {
+// ✅ Aman parsing log
+let logData = [];
+if (fs.existsSync(logPath)) {
   try {
-    await post.evaluate(el => el.scrollIntoView({ behavior: 'smooth', block: 'center' }));
-    await randomDelay(2000, 4000);
-
-    const clicked = await post.evaluate(() => {
-      const btn = Array.from(document.querySelectorAll('div[role="button"] span'))
-        .find(b => /oment/i.test(b.innerText));
-      if (btn) { btn.click(); return true; }
-      return false;
-    });
-
-    return clicked;
-  } catch (e) {
-    console.log('⚠️ ERROR klik tombol:', e.message);
-    return false;
-  }
-}
-
-async function findCommentBox(page) {
-  const selectors = [
-    'div[contenteditable="true"][data-lexical-editor="true"]',
-    'div[aria-label="Tulis komentar"]',
-    'div[role="textbox"][contenteditable="true"]'
-  ];
-  for (const sel of selectors) {
-    const box = await page.$(sel);
-    if (box) return box;
-  }
-  return null;
-}
-
-async function typeComment(page, text) {
-  const box = await findCommentBox(page);
-  if (!box) return false;
-
-  try {
-    await box.focus();
-    await randomDelay(1000, 2000);
-    await page.keyboard.type(text, { delay: 80 });
-    await sleep(1500);
-    await page.keyboard.press('Enter');
-    await randomDelay(3000, 5000);
-    return true;
+    const raw = fs.readFileSync(logPath, 'utf-8').trim();
+    logData = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(logData)) throw new Error('Log bukan array');
   } catch {
-    return false;
+    console.warn('⚠️ [LOG] auto_komen.log rusak, reset log.');
+    logData = [];
+    fs.writeFileSync(logPath, '[]');
+  }
+} else {
+  fs.writeFileSync(logPath, '[]');
+}
+
+function saveLog(id) {
+  if (!logData.includes(id)) {
+    logData.push(id);
+    if (logData.length > 1000) logData = logData.slice(-1000);
+    fs.writeFileSync(logPath, JSON.stringify(logData, null, 2));
   }
 }
 
-async function autoComment(page) {
-  console.log('[TEST] Menjalankan auto_komen.js Fix 34 Modular');
+function isLogged(id) {
+  return logData.includes(id);
+}
 
-  const history = loadHistory();
-  const commented = new Set(history);
-  let count = 0;
+const delay = ms => new Promise(res => setTimeout(res, ms));
 
-  for (let batch = 0; batch < 10; batch++) {
-    console.log(`[WAIT] Scrolling batch ${batch + 1}...`);
-    await page.evaluate(() => window.scrollBy(0, 2000));
-    await randomDelay();
+export async function autoComment(page, browser) {
+  console.log('[WAIT] Scrolling batch 1...');
 
+  let batch = 1;
+  let success = false;
+
+  while (batch <= 10 && !success) {
     const posts = await page.$$('[data-ad-preview="message"]');
-    console.log(`🔍 Batch ${batch + 1}: ${posts.length} postingan ditemukan`);
+    console.log(`🔍 Batch ${batch}: ${posts.length} postingan ditemukan`);
 
-    for (let i = 0; i < posts.length; i++) {
+    if (posts.length === 0) {
+      await page.evaluate(() => window.scrollBy(0, window.innerHeight));
+      await delay(3000);
+      batch++;
+      continue;
+    }
+
+    for (let i = 0; i < posts.length && !success; i++) {
       const post = posts[i];
       const text = await post.evaluate(el => el.innerText || '');
-      if (!text) continue;
 
-      const uid = crypto.createHash('sha1').update(text.slice(0, 100)).digest('hex');
-      if (commented.has(uid)) continue;
-      if (!(await isPostRecent(post))) continue;
-
-      const skipReason = await shouldSkip(post);
-      if (skipReason) { console.log(`⏭️ [${batch + 1}-${i + 1}] ${skipReason}`); continue; }
-
-      console.log(`🎯 [${batch + 1}-${i + 1}] ${text.slice(0, 60).replace(/\n/g, ' ')}...`);
-
-      const aiComment = await getAIComment(text);
-      if (!aiComment) {
-        console.log(`⚠️ [${batch + 1}-${i + 1}] Gagal generate komentar AI`);
-        saveHistory(uid); // ✅ simpan UID walau gagal generate agar tidak spam
-        await sleep(2000);
+      if (!text.trim()) {
+        console.log(`⏭️ [${batch}-${i + 1}] Tidak ada teks`);
         continue;
       }
 
-      console.log(`💬 Komentar AI: ${aiComment}`);
-
-      const clicked = await clickCommentButton(post);
-      if (!clicked) {
-        console.log(`⚠️ [${batch + 1}-${i + 1}] Tombol komentar tidak ditemukan`);
-        saveHistory(uid);
+      const postId = crypto.createHash('sha1').update(text.slice(0, 120)).digest('hex');
+      if (isLogged(postId)) {
+        console.log(`⏭️ [${batch}-${i + 1}] Sudah pernah dikomentari`);
         continue;
       }
 
-      const success = await typeComment(page, aiComment);
-      if (success) {
-        console.log(`✅ Komentar berhasil dikirim ke postingan [${batch + 1}-${i + 1}]`);
-        saveHistory(uid);
-        await logAction('auto_komen', aiComment);
-        count++;
-        if (count >= 2) { console.log('✅ Sesi selesai.'); return true; }
-      } else {
-        console.log(`❌ [${batch + 1}-${i + 1}] Gagal mengetik komentar`);
-        saveHistory(uid); // ✅ walau gagal ketik tetap disimpan agar tidak diulang
+      console.log(`🎯 [${batch}-${i + 1}] ${text.slice(0, 60).replace(/\n/g, ' ')}...`);
+
+      const comment = await getAIComment(text);
+      if (!comment) {
+        console.log(`⚠️ [${batch}-${i + 1}] Gagal generate komentar AI`);
+        continue;
       }
 
-      await randomDelay(4000, 7000);
+      console.log(`💬 Komentar AI: ${comment}`);
+      await post.evaluate(el => el.scrollIntoView({ behavior: 'smooth', block: 'center' }));
+      await delay(2500);
+
+      try {
+        const clicked = await post.evaluate(() => {
+          const btn = Array.from(document.querySelectorAll('div[role="button"] span'))
+            .find(b => /oment/i.test(b.innerText));
+          if (btn) { btn.click(); return true; }
+          return false;
+        });
+
+        if (!clicked) {
+          console.log(`🔴 [DEBUG] Tombol komentar tidak ditemukan`);
+          continue;
+        }
+
+        console.log('🟢 [DEBUG] Tombol komentar diklik, tunggu kolom...');
+        await delay(4000);
+
+        let box = await page.$('div[contenteditable="true"][data-lexical-editor="true"]');
+        if (!box) box = await page.$('div[aria-label="Tulis komentar"]');
+        if (!box) box = await page.$('div[contenteditable="true"]');
+
+        if (!box) {
+          console.log(`🔴 [DEBUG] Tidak ada kolom komentar ditemukan`);
+          continue;
+        }
+
+        console.log('🟢 [DEBUG] Kolom komentar ditemukan, mengetik...');
+        await box.focus();
+        await delay(1000);
+
+        let typed = false;
+        for (let t = 0; t < 3; t++) {
+          await page.keyboard.type(comment, { delay: 90 });
+          await delay(1500);
+          const currentText = await page.evaluate(el => el.innerText, box);
+          if (currentText.includes(comment.slice(0, 5))) { typed = true; break; }
+          console.log('⚠️ [DEBUG] Teks belum masuk, ulangi...');
+        }
+
+        if (!typed) {
+          console.log(`❌ [${batch}-${i + 1}] Gagal mengetik komentar`);
+          continue;
+        }
+
+        await page.keyboard.press('Enter');
+        await delay(4000);
+
+        console.log(`✅ Komentar berhasil dikirim ke postingan [${batch}-${i + 1}]`);
+        saveLog(postId);
+        success = true;
+
+        // ✅ Tutup kolom komentar setelah kirim
+        await page.keyboard.press('Escape');
+        await delay(1000);
+        console.log('🔵 [DEBUG] Kolom komentar ditutup.');
+
+      } catch (err) {
+        console.log(`❌ [${batch}-${i + 1}] Gagal komentar: ${err.message}`);
+      }
+    }
+
+    if (!success) {
+      await page.evaluate(() => window.scrollBy(0, window.innerHeight));
+      await delay(3500);
+      batch++;
     }
   }
 
-  console.log('✅ Tidak ada postingan valid atau semua sudah dikomentari.');
-  return true;
+  // ✅ Setelah sukses, tutup browser dan akhiri script
+  if (success) {
+    console.log('✅ Semua komentar selesai. Menutup browser...');
+    await browser.close();
+    process.exit(0);
+  } else {
+    console.log('⚠️ Tidak ada komentar yang terkirim. Menutup browser...');
+    await browser.close();
+    process.exit(1);
+  }
 }
-
-module.exports = { autoComment };

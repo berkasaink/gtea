@@ -26,6 +26,7 @@ export async function autoReplay(page, browser = null) {
   await page.goto('https://www.facebook.com/notifications', { waitUntil: 'networkidle2', timeout: 60000 });
   await delay(5000);
 
+  const myName = 'Lina'; // ✅ Ganti dengan nama akun Anda
   let targetLink = null;
   let targetId = null;
 
@@ -60,18 +61,10 @@ export async function autoReplay(page, browser = null) {
 
   console.log(`🎯 Target mention ditemukan: ${targetLink}`);
 
-  // ✅ Buka halaman komentar dengan retry jika timeout
-  let successNav = false;
-  for (let attempt = 1; attempt <= 2 && !successNav; attempt++) {
-    try {
-      await page.goto(targetLink, { waitUntil: 'domcontentloaded', timeout: 60000 });
-      successNav = true;
-    } catch {
-      console.log(`⚠️ [RETRY] Gagal load halaman, percobaan ke-${attempt}`);
-      await delay(5000);
-    }
-  }
-  if (!successNav) {
+  // ✅ Buka halaman komentar
+  try {
+    await page.goto(targetLink, { waitUntil: 'domcontentloaded', timeout: 60000 });
+  } catch {
     console.log('❌ Gagal memuat halaman komentar.');
     if (browser) await browser.close();
     return false;
@@ -83,29 +76,32 @@ export async function autoReplay(page, browser = null) {
   const postText = await page.$eval('div[role="article"]', el => el.innerText.slice(0, 120)).catch(() => 'Tidak terbaca');
   console.log(`📝 Postingan: "${postText}..."`);
 
-  // ✅ Ambil komentar orang lain
-  const comments = await page.$$eval('ul[role="list"] li[role="listitem"] div[dir="auto"]', els =>
-    els.map(e => e.innerText.trim()).filter(t => t.length > 0)
+  // ✅ Ambil komentar di bawah postingan
+  const comments = await page.$$eval('ul[role="list"] li[role="listitem"]', els =>
+    els.map(li => {
+      const author = li.querySelector('strong, h3, span')?.innerText || '';
+      const text = li.querySelector('div[dir="auto"]')?.innerText || '';
+      return { author, text };
+    }).filter(c => c.text.length > 0)
   );
 
-  if (!comments || comments.length === 0) {
+  // ✅ Cari komentar mention valid (bukan dari kita sendiri)
+  const targetComment = comments.find(c =>
+    c.text.includes('@') &&
+    !c.author.toLowerCase().includes(myName.toLowerCase()) &&
+    !c.text.toLowerCase().includes(myName.toLowerCase())
+  );
+
+  if (!targetComment) {
     console.log('⏭️ Tidak ada komentar mention orang lain ditemukan.');
     if (browser) await browser.close();
     return false;
   }
 
-  // ✅ Cari komentar yang berisi mention selain akun sendiri
-  const targetComment = comments.find(t => /@|anda|you/i.test(t) && !/saya|aku/i.test(t));
-  if (!targetComment) {
-    console.log('⏭️ Tidak ada komentar mention valid.');
-    if (browser) await browser.close();
-    return false;
-  }
-
-  console.log(`💬 Komentar target: "${targetComment.slice(0, 80)}..."`);
+  console.log(`💬 Komentar target dari ${targetComment.author}: "${targetComment.text.slice(0, 80)}..."`);
 
   // ✅ Minta balasan AI
-  const reply = await getAIComment(targetComment);
+  const reply = await getAIComment(targetComment.text);
   if (!reply || reply.startsWith('[AI_ERROR_400]')) {
     console.log('⚠️ Gagal generate balasan AI.');
     if (browser) await browser.close();

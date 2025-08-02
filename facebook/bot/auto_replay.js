@@ -24,13 +24,13 @@ const delay = ms => new Promise(r => setTimeout(r, ms));
 export async function autoReplay(page, browser = null) {
   console.log('[WAIT] Membuka notifikasi Facebook...');
   await page.goto('https://www.facebook.com/notifications', { waitUntil: 'networkidle2', timeout: 60000 });
-  await delay(5000);
+  await delay(4000);
 
-  const myName = 'Lina'; // ✅ Ganti dengan nama akun Anda
+  const myName = 'Lina'; // ✅ Ganti sesuai nama akun
   let targetLink = null;
   let targetId = null;
 
-  // 🔍 Cari mention di notifikasi
+  // 🔍 Cari target mention di notifikasi
   for (let i = 1; i <= 10 && !targetLink; i++) {
     console.log(`[WAIT] Scrolling notifikasi... (${i}/10)`);
     await page.evaluate(() => window.scrollBy(0, window.innerHeight));
@@ -43,7 +43,8 @@ export async function autoReplay(page, browser = null) {
     const found = mentions.find(m => /menyebut anda|mention you/i.test(m.text));
     if (found) {
       targetLink = found.href;
-      targetId = new URL(found.href).searchParams.get('reply_comment_id') || new URL(found.href).searchParams.get('comment_id');
+      targetId = new URL(found.href).searchParams.get('reply_comment_id') ||
+                 new URL(found.href).searchParams.get('comment_id');
     }
   }
 
@@ -72,24 +73,26 @@ export async function autoReplay(page, browser = null) {
 
   await delay(6000);
 
-  // ✅ Ambil text postingan utama
+  // ✅ Ambil text postingan
   const postText = await page.$eval('div[role="article"]', el => el.innerText.slice(0, 120)).catch(() => 'Tidak terbaca');
   console.log(`📝 Postingan: "${postText}..."`);
 
-  // ✅ Ambil komentar di bawah postingan
-  const comments = await page.$$eval('ul[role="list"] li[role="listitem"]', els =>
-    els.map(li => {
-      const author = li.querySelector('strong, h3, span')?.innerText || '';
-      const text = li.querySelector('div[dir="auto"]')?.innerText || '';
+  // ✅ Ambil semua komentar dengan selector yang lebih dalam
+  const comments = await page.$$eval('div[aria-label="Komentar"] div[role="article"], div[role="comment"]', els =>
+    els.map(el => {
+      const author = el.querySelector('strong, h3, span')?.innerText || '';
+      const text = el.innerText || '';
       return { author, text };
-    }).filter(c => c.text.length > 0)
+    }).filter(c => c.text.length > 2)
   );
 
-  // ✅ Cari komentar mention valid (bukan dari kita sendiri)
+  // ✅ Debug semua komentar yang ditemukan
+  console.log(`🔎 Ditemukan ${comments.length} komentar di thread ini.`);
+
+  // ✅ Cari komentar mention valid (bukan milik kita)
   const targetComment = comments.find(c =>
-    c.text.includes('@') &&
-    !c.author.toLowerCase().includes(myName.toLowerCase()) &&
-    !c.text.toLowerCase().includes(myName.toLowerCase())
+    !c.author.toLowerCase().includes('lina') &&  // bukan dari kita
+    c.text.toLowerCase().includes(myName.toLowerCase()) // mention kita
   );
 
   if (!targetComment) {
@@ -98,9 +101,9 @@ export async function autoReplay(page, browser = null) {
     return false;
   }
 
-  console.log(`💬 Komentar target dari ${targetComment.author}: "${targetComment.text.slice(0, 80)}..."`);
+  console.log(`💬 Komentar target dari ${targetComment.author}: "${targetComment.text.slice(0, 90)}..."`);
 
-  // ✅ Minta balasan AI
+  // ✅ Generate balasan AI
   const reply = await getAIComment(targetComment.text);
   if (!reply || reply.startsWith('[AI_ERROR_400]')) {
     console.log('⚠️ Gagal generate balasan AI.');
@@ -112,13 +115,13 @@ export async function autoReplay(page, browser = null) {
 
   // ✅ Kirim balasan
   try {
-    const box = await page.$('div[contenteditable="true"][data-lexical-editor="true"]');
+    const box = await page.$('div[contenteditable="true"][data-lexical-editor="true"], div[aria-label="Tulis balasan"], div[contenteditable="true"]');
     if (!box) throw new Error('Kolom balas tidak ditemukan');
 
     await box.focus();
     await delay(500);
-    await page.keyboard.type(reply, { delay: 90 });
-    await delay(1000);
+    await page.keyboard.type(reply, { delay: 80 });
+    await delay(800);
     await page.keyboard.press('Enter');
     await delay(3000);
 

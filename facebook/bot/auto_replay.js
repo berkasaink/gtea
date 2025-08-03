@@ -15,10 +15,10 @@ export async function autoReplay(page, browser) {
   console.log('[WAIT] Membuka notifikasi Facebook...');
   await page.goto('https://www.facebook.com/notifications', { waitUntil: 'networkidle2', timeout: 0 });
 
+  // Deteksi nama akun sendiri
   const userSelf = await (async () => {
-    try {
-      return await page.$eval('a[aria-label*="Profil"] span', el => el.innerText.trim());
-    } catch { return 'ME'; }
+    try { return await page.$eval('a[aria-label*="Profil"] span', el => el.innerText.trim()); }
+    catch { return 'ME'; }
   })();
   console.log(`👤 Nama akun login terdeteksi: ${userSelf}`);
 
@@ -29,12 +29,12 @@ export async function autoReplay(page, browser) {
     await page.evaluate(() => window.scrollBy(0, window.innerHeight));
     await delay(2000);
 
-    // Ambil semua notifikasi komentar
+    // Ambil semua notifikasi termasuk innerHTML
     const notifLinks = await page.$$eval('a[href*="comment_id"]', as =>
       as.map(a => ({
         href: a.href,
-        user: (a.querySelector('strong')?.innerText || a.innerText.split(' ')[0] || 'Belum').trim(),
-        fullText: a.innerText.trim()
+        html: a.innerHTML,
+        text: a.innerText.trim()
       }))
     );
 
@@ -42,26 +42,31 @@ export async function autoReplay(page, browser) {
       const notifId = crypto.createHash('sha1').update(notif.href).digest('hex');
       if (isLogged(notifId)) { console.log('⏭️ Sudah dibalas sebelumnya.'); continue; }
 
-      let targetUser = notif.user;
-      const match = notif.fullText.match(/^(.+?) menyebut anda/);
-      if (match) targetUser = match[1];
+      // ✅ Ekstrak nama user mention dengan regex
+      let targetUser = 'Belum';
+      const regexMention = notif.text.match(/^(.+?) (menyebut anda|mentioned you|replied)/i);
+      if (regexMention) targetUser = regexMention[1];
+
+      // ✅ Jika gagal, ambil dari innerHTML dengan regex
+      if (targetUser === 'Belum') {
+        const regexHTML = notif.html.match(/>([^<]+)<\/strong>/i);
+        if (regexHTML) targetUser = regexHTML[1].trim();
+      }
+
       console.log(`🎯 Target mention dari: ${targetUser}`);
       console.log(`🌐 URL: ${notif.href}`);
 
       await page.goto(notif.href, { waitUntil: 'networkidle2', timeout: 0 });
       await delay(5000);
 
-      // Scroll semua komentar
-      for (let i = 0; i < 6; i++) {
-        await page.evaluate(() => window.scrollBy(0, window.innerHeight));
-        await delay(1500);
-      }
+      // Scroll komentar
+      for (let i = 0; i < 6; i++) { await page.evaluate(() => window.scrollBy(0, window.innerHeight)); await delay(1500); }
 
       fs.writeFileSync('./logs/comments_dump.html', await page.content());
       console.log('📝 Dump HTML komentar ke logs/comments_dump.html');
 
-      // Ambil semua komentar dengan fallback regex
-      const comments = await page.$$eval('div[aria-label][role="article"], div[role="article"]', nodes =>
+      // Ambil semua komentar
+      const comments = await page.$$eval('div[role="article"]', nodes =>
         nodes.map((n, i) => ({
           idx: i + 1,
           user: (n.querySelector('h3 a, strong a, span a')?.innerText || '').trim(),
@@ -69,16 +74,17 @@ export async function autoReplay(page, browser) {
         }))
       );
 
-      // Debug semua user komentar
       console.log('📌 Semua komentar terdeteksi:', comments.map(c => `${c.user}: ${c.text}`).slice(-10));
 
+      // Filter komentar dari user mention
       const targetComments = comments.filter(c => c.user && c.text && c.user.toLowerCase().includes(targetUser.toLowerCase()));
       if (!targetComments.length) { console.log('⏭️ Tidak ada komentar dari target user ditemukan.'); continue; }
 
+      // Ambil komentar terbaru
       const lastComment = targetComments[targetComments.length - 1];
       console.log(`💬 Komentar terbaru dari ${lastComment.user}: "${lastComment.text}"`);
 
-      // Klik tombol Balas via XPath
+      // Klik Balas
       const replyXPath = `(//div[role="article"])[${lastComment.idx}]//span[contains(text(),'Balas')]`;
       const [replyBtn] = await page.$x(replyXPath);
       if (!replyBtn) { console.log('❌ Tombol Balas tidak ditemukan.'); continue; }
@@ -87,7 +93,6 @@ export async function autoReplay(page, browser) {
       console.log('✅ Klik tombol Balas sukses.');
       await delay(1200);
 
-      // Cari kolom input balas
       const replyBox = await page.$('div[contenteditable="true"][role="textbox"]');
       if (!replyBox) { console.log('❌ Kolom input balas tidak muncul.'); continue; }
 

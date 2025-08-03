@@ -1,9 +1,9 @@
 # ==============================
-#  Autopush Git untuk Windows (PowerShell) - Final Version with Pull Update
+#  Autopush Git untuk Windows (PowerShell) - FIXED VERSION
 # ==============================
 
 # Konfigurasi
-$RepoDir = "C:\Users\goenk\gtea"
+$RepoDir = "C:\Users\goenk\berkasku"
 $Branch  = (git branch --show-current)
 
 if (-not $Branch) {
@@ -50,6 +50,21 @@ function Select-File {
     }
 }
 
+# ===== Fungsi Push Umum =====
+function Do-GitPush($commitMessage) {
+    Set-Location $RepoDir
+    git pull origin $Branch --rebase
+
+    git commit -m "$commitMessage" 2>$null
+    git push origin $Branch
+
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "`n✅ Push berhasil!"
+    } else {
+        Write-Host "`n❌ Push gagal! Periksa error di atas."
+    }
+}
+
 # ===== Push File =====
 function Push-File {
     Write-Host "`n=== Pilih File yang Ingin di-Push ==="
@@ -57,8 +72,6 @@ function Push-File {
     if (-not $selected) { Write-Host "Batal"; return }
 
     $relativePath = $selected.Replace("$RepoDir\", "").Replace("\", "/")
-    Set-Location $RepoDir
-
     git add "$relativePath"
 
     $status = git status --porcelain
@@ -68,11 +81,7 @@ function Push-File {
         return
     }
 
-    git commit -m "update $relativePath"
-    git pull origin $Branch --allow-unrelated-histories --no-edit 2>$null
-    git push origin $Branch
-
-    Write-Host "`nSukses: File $relativePath berhasil di-push!"
+    Do-GitPush "update $relativePath"
     Write-Host "URL: https://github.com/berkasaink/gtea/blob/$Branch/$relativePath"
 }
 
@@ -80,7 +89,6 @@ function Push-File {
 function Push-Folder {
     Write-Host "`n=== Push Folder ==="
     $folder = Read-Host "Masukkan path folder relatif dari $RepoDir"
-    Set-Location $RepoDir
     git add "$folder"
 
     $status = git status --porcelain
@@ -90,18 +98,13 @@ function Push-Folder {
         return
     }
 
-    git commit -m "update folder $folder"
-    git pull origin $Branch --allow-unrelated-histories --no-edit 2>$null
-    git push origin $Branch
-
-    Write-Host "`nSukses: Folder $folder berhasil di-push!"
+    Do-GitPush "update folder $folder"
     Write-Host "URL: https://github.com/berkasaink/gtea/tree/$Branch/$folder"
 }
 
 # ===== Full Backup =====
 function Full-Backup {
     Write-Host "`n=== Push Semua Perubahan (Full Backup) ==="
-    Set-Location $RepoDir
     git add .
 
     $status = git status --porcelain
@@ -111,11 +114,7 @@ function Full-Backup {
         return
     }
 
-    git commit -m "full backup"
-    git pull origin $Branch --allow-unrelated-histories --no-edit 2>$null
-    git push origin $Branch
-
-    Write-Host "`nSukses: Semua perubahan berhasil di-push!"
+    Do-GitPush "full backup"
     Write-Host "URL: https://github.com/berkasaink/gtea"
 }
 

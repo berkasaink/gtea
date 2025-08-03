@@ -1,134 +1,150 @@
-import puppeteer from 'puppeteer';
+import puppeteer from 'puppeteer-extra';
+import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import fs from 'fs';
 import path from 'path';
-import { getOpenAIReply } from '../modules/openai.js';
-import { loadCookies, saveCookies } from '../modules/browser.js';
+import crypto from 'crypto';
+import { fileURLToPath } from 'url';
+import { getAIComment } from '../modules/openai.js';
 
-const LOG_FILE = path.resolve('./logs/auto_replay.log');
-const COMMENT_DUMP = path.resolve('./logs/comments_dump.html');
-const MAX_SCROLL = 10;
-let LOGIN_NAME = "ME";
+puppeteer.use(StealthPlugin());
 
-function log(msg) {
-    console.log(msg);
-    fs.appendFileSync(LOG_FILE, `[${new Date().toISOString()}] ${msg}\n`);
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const logPath = path.resolve(__dirname, '../logs/auto_replay.log');
+const cookiesPath = path.resolve(__dirname, '../cookies.json');
+
+// === Log aman ===
+let logData = [];
+if (fs.existsSync(logPath)) {
+  try {
+    logData = JSON.parse(fs.readFileSync(logPath, 'utf-8').trim()) || [];
+  } catch {
+    console.warn('⚠️ [LOG] auto_replay.log rusak, reset log.');
+    logData = [];
+  }
 }
+const saveLog = id => {
+  if (!logData.includes(id)) {
+    logData.push(id);
+    if (logData.length > 1000) logData = logData.slice(-1000);
+    fs.writeFileSync(logPath, JSON.stringify(logData, null, 2));
+  }
+};
+const isLogged = id => logData.includes(id);
+const delay = ms => new Promise(res => setTimeout(res, ms));
 
-function delay(ms) {
-    return new Promise(res => setTimeout(res, ms));
-}
+// === Jalankan Bot ===
+export async function autoReplay() {
+  console.log('[WAIT] Membuka browser...');
+  const browser = await puppeteer.launch({ headless: false, args: ['--no-sandbox'] });
+  const page = await browser.newPage();
 
-(async () => {
-    log("[TEST] Menjalankan auto_replay.js Fix 37");
+  // ✅ Load cookies
+  if (fs.existsSync(cookiesPath)) {
+    const cookies = JSON.parse(fs.readFileSync(cookiesPath, 'utf-8'));
+    await page.setCookie(...cookies);
+  }
 
-    const browser = await puppeteer.launch({
-        headless: false,
-        args: ['--no-sandbox', '--disable-setuid-sandbox']
-    });
+  // ✅ Buka halaman notifikasi Facebook
+  await page.goto('https://www.facebook.com/notifications', { waitUntil: 'networkidle2' });
+  console.log('👤 Nama akun login terdeteksi: ME');
 
-    const page = await browser.newPage();
+  let success = false;
+  let batch = 1;
 
-    // ✅ Load cookies
-    await loadCookies(page, './cookies.json');
-    await page.goto('https://www.facebook.com/', { waitUntil: 'networkidle2' });
-
-    // ✅ Deteksi nama akun login
-    try {
-        await page.waitForSelector('[role="banner"] [aria-label]', { timeout: 5000 });
-        LOGIN_NAME = await page.$eval('[role="banner"] [aria-label]', el => el.textContent.trim());
-    } catch { LOGIN_NAME = "ME"; }
-    log(`👤 Nama akun login terdeteksi: ${LOGIN_NAME}`);
-
-    // ✅ Buka notifikasi
-    log("[WAIT] Membuka notifikasi Facebook...");
-    await page.goto('https://www.facebook.com/notifications', { waitUntil: 'networkidle2' });
+  while (batch <= 10 && !success) {
+    console.log(`[WAIT] Scrolling notifikasi... (${batch}/10)`);
     await delay(3000);
 
-    let foundTarget = false;
+    const notifLinks = await page.$$eval('a[href*="comment_id"]', links =>
+      links.map(a => ({ url: a.href, text: a.innerText }))
+    );
 
-    // ✅ Scroll notifikasi hingga MAX_SCROLL
-    for (let i = 1; i <= MAX_SCROLL; i++) {
-        log(`[WAIT] Scrolling notifikasi... (${i}/${MAX_SCROLL})`);
+    for (const notif of notifLinks) {
+      const mentionUser = (notif.text.match(/([\w\s]+) menyebut anda/) || [])[1] || 'Belum';
+      console.log(`🎯 Target mention dari: ${mentionUser}`);
+      console.log(`🌐 URL: ${notif.url}`);
 
-        const notifications = await page.$$eval('[role="article"] a[href*="notif_t"]', els =>
-            els.map(e => ({
-                url: e.href,
-                text: e.innerText
-            }))
-        );
+      const notifId = crypto.createHash('sha1').update(notif.url).digest('hex');
+      if (isLogged(notifId)) {
+        console.log('⏭️ Sudah pernah dibalas, skip.');
+        continue;
+      }
 
-        for (let notif of notifications) {
-            const notifUser = notif.text.split(' ')[0]?.trim() || "Belum";
-            log(`🎯 Target mention dari: ${notifUser}`);
-            log(`🌐 URL: ${notif.url}`);
+      // ✅ Buka komentar target
+      await page.goto(notif.url, { waitUntil: 'networkidle2' });
+      await delay(5000);
 
-            // ✅ Buka URL komentar target
-            await page.goto(notif.url, { waitUntil: 'networkidle2' });
-            await delay(5000);
+      // ✅ Dump komentar untuk debug
+      const html = await page.content();
+      fs.writeFileSync(path.resolve(__dirname, '../logs/comments_dump.html'), html);
 
-            // ✅ Dump HTML komentar ke file
-            const html = await page.content();
-            fs.writeFileSync(COMMENT_DUMP, html);
+      // ✅ Cari komentar terbaru dari user yang mention
+      const comments = await page.$$eval('div[aria-label="Komentar"] div[dir="auto"]', els =>
+        els.map(e => ({ user: e.closest('[aria-label="Komentar"]').innerText.split('\n')[0], text: e.innerText }))
+      );
 
-            // ✅ Cari komentar terbaru dari user target
-            const comments = await page.$$eval('[aria-label="Tulis komentar"]', els => els.map(e => e.innerText.trim()));
-            const allComments = await page.$$eval('[aria-label="Balas"]', els => els.map(e => e.closest('[role="article"]')?.innerText || ""));
-            log(`📌 Semua komentar terdeteksi: ${JSON.stringify(allComments.slice(0,5))}`);
+      if (!comments.length) {
+        console.log('⏭️ Tidak ada komentar ditemukan.');
+        continue;
+      }
 
-            // ✅ Filter komentar user target
-            const targetComment = allComments.reverse().find(c =>
-                c.includes(notifUser) &&
-                !c.includes('Suka') &&
-                !c.includes('Balas')
-            );
+      // ✅ Filter komentar milik user yang mention
+      const targetComments = comments.filter(c => c.user.includes(mentionUser));
+      if (!targetComments.length) {
+        console.log('⏭️ Tidak ada komentar dari target user ditemukan.');
+        continue;
+      }
 
-            if (!targetComment) {
-                log("⏭️ Tidak ada komentar dari target user ditemukan.");
-                continue;
-            }
+      // ✅ Ambil komentar terbaru user tersebut
+      const latest = targetComments[targetComments.length - 1];
+      console.log(`💬 Target: "${latest.text}" oleh ${latest.user}`);
 
-            if (targetComment.includes(LOGIN_NAME)) {
-                log("⏭️ Komentar ini milik akun sendiri, dilewati.");
-                continue;
-            }
+      // ✅ Ambil balasan AI
+      const replyText = await getAIComment(latest.text);
+      if (!replyText || replyText.startsWith('[AI_ERROR')) {
+        console.log('❌ [AI] Gagal generate balasan, skip.');
+        continue;
+      }
+      console.log(`🤖 Balasan AI: ${replyText}`);
 
-            log(`💬 Target komentar: "${targetComment}" oleh ${notifUser}`);
-
-            // ✅ Klik tombol Balas
-            try {
-                await page.evaluate((user) => {
-                    const comments = [...document.querySelectorAll('[aria-label="Balas"]')];
-                    const btn = comments.find(b => b.closest('[role="article"]')?.innerText.includes(user));
-                    if (btn) btn.click();
-                }, notifUser);
-
-                await delay(2000);
-
-                // ✅ Tulis komentar balasan
-                const replyBox = await page.$('form[role="presentation"] div[contenteditable="true"]');
-                const aiReply = await getOpenAIReply(targetComment);
-                await replyBox.type(aiReply, { delay: 50 });
-                await delay(1000);
-
-                // ✅ Kirim komentar
-                await page.keyboard.press('Enter');
-                log(`🤖 AI Reply: ${aiReply}`);
-                log("✅ Komentar terkirim.");
-                foundTarget = true;
-                break;
-
-            } catch (err) {
-                log(`❌ ERROR klik balas: ${err.message}`);
-            }
-        }
-
-        if (foundTarget) break;
-
-        await page.evaluate(() => window.scrollBy(0, window.innerHeight));
+      // ✅ Klik tombol balas & ketik
+      try {
+        const replyBtn = await page.$x("//span[contains(text(),'Balas')]");
+        if (replyBtn.length) await replyBtn[replyBtn.length - 1].click();
         await delay(2000);
+
+        const box = await page.$('div[contenteditable="true"]');
+        if (!box) throw new Error('Kolom balas tidak ditemukan');
+
+        await box.focus();
+        await page.keyboard.type(replyText, { delay: 90 });
+        await delay(1000);
+        await page.keyboard.press('Enter');
+        await delay(3000);
+
+        console.log('✅ Balasan berhasil dikirim.');
+        saveLog(notifId);
+        success = true;
+      } catch (err) {
+        console.log(`❌ [ERROR] Gagal membalas: ${err.message}`);
+      }
     }
 
-    if (!foundTarget) log("[GAGAL] auto_replay tidak menemukan komentar valid.");
+    if (!success) {
+      await page.evaluate(() => window.scrollBy(0, window.innerHeight));
+      batch++;
+      await delay(3000);
+    }
+  }
 
-    await browser.close();
-})();
+  console.log(success ? '✅ Semua balasan selesai.' : '⚠️ Tidak ada balasan terkirim.');
+  await browser.close();
+  process.exit(success ? 0 : 1);
+}
+
+// ✅ Auto-run jika dipanggil langsung
+if (import.meta.url === `file://${process.argv[1]}`) {
+  autoReplay();
+}

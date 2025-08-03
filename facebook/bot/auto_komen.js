@@ -1,4 +1,4 @@
-import { getAIComment } from '../modules/openrouter.js';
+import { getAIComment } from '../modules/openai.js';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
@@ -6,11 +6,9 @@ import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
-// === Lokasi file log khusus auto_komen ===
 const logPath = path.resolve(__dirname, '../logs/auto_komen.log');
 
-// ✅ Aman parsing log
+// === Log aman ===
 let logData = [];
 if (fs.existsSync(logPath)) {
   try {
@@ -26,7 +24,6 @@ if (fs.existsSync(logPath)) {
   fs.writeFileSync(logPath, '[]');
 }
 
-// === Fungsi log lokal ===
 function saveLog(id) {
   if (!logData.includes(id)) {
     logData.push(id);
@@ -71,10 +68,12 @@ export async function autoComment(page, browser = null) {
 
       console.log(`🎯 [${batch}-${i + 1}] ${text.slice(0, 60).replace(/\n/g, ' ')}...`);
 
-      // ✅ Ambil komentar dari AI
+      // ✅ Ambil komentar AI
       const comment = await getAIComment(text);
-      if (!comment || comment.startsWith('[AI_ERROR_400]')) {  // filter error AI 400
-        console.log(`⚠️ [${batch}-${i + 1}] Gagal generate komentar AI`);
+
+      // ✅ Jika error AI (HTTP 400), skip tanpa log tambahan
+      if (!comment || comment.startsWith('[AI_ERROR_400]')) {
+        console.log(`⏭️ [${batch}-${i + 1}] AI gagal generate komentar`);
         continue;
       }
 

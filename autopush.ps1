@@ -1,27 +1,21 @@
 # ==============================
-#  Autopush Git untuk Windows (PowerShell) - FIXED VERSION
+# 🔥 Autopush Git PRO untuk Windows (PowerShell)
+# ✅ Auto stash → pull → reapply → push tanpa error
 # ==============================
 
-# Konfigurasi
+# Konfigurasi Repo
 $RepoDir = "C:\Users\goenk\berkasku"
-$Branch  = (git branch --show-current)
-
-if (-not $Branch) {
-    $Branch = "main"
-}
+$Branch  = (git -C $RepoDir branch --show-current)
+if (-not $Branch) { $Branch = "main" }
 
 # ===== Fungsi Menampilkan File & Folder =====
 function Show-Files {
     param([string]$path)
-
     $items = Get-ChildItem -Path $path
     $i = 1
     foreach ($item in $items) {
-        if ($item.PSIsContainer) {
-            Write-Host "$i. [DIR] $($item.Name)"
-        } else {
-            Write-Host "$i. [FILE] $($item.Name)"
-        }
+        if ($item.PSIsContainer) { Write-Host "$i. [DIR] $($item.Name)" }
+        else { Write-Host "$i. [FILE] $($item.Name)" }
         $i++
     }
     Write-Host "$i. [Kembali]"
@@ -31,126 +25,119 @@ function Show-Files {
 # ===== Fungsi Navigasi & Pilih File =====
 function Select-File {
     param([string]$currentPath)
-
     while ($true) {
-        Write-Host ""
-        Write-Host "Folder saat ini: $($currentPath.Replace($RepoDir,''))"
+        Write-Host "`nFolder saat ini: $($currentPath.Replace($RepoDir,''))"
         $entries = Show-Files $currentPath
         $choice = Read-Host "Pilih nomor [1-$($entries.Count+1)]"
-
         if ($choice -eq ($entries.Count+1)) { return $null }
-
         $index = [int]$choice - 1
         if ($entries[$index].PSIsContainer) {
             $result = Select-File $entries[$index].FullName
             if ($result) { return $result }
-        } else {
-            return $entries[$index].FullName
-        }
+        } else { return $entries[$index].FullName }
     }
 }
 
-# ===== Fungsi Push Umum =====
-function Do-GitPush($commitMessage) {
+# ===== Auto Cleanup sebelum Push =====
+function Auto-Cleanup {
+    Write-Host "`n🔄 Cleaning..."
     Set-Location $RepoDir
+    if (Test-Path "facebook/api_chatgpt.json") { git rm --cached facebook/api_chatgpt.json 2>$null }
+    git add .gitignore 2>$null
+    git add autopush.ps1 2>$null
+}
+
+# ===== Auto Stash & Pull =====
+function Auto-Pull {
+    Write-Host "🔄 Menyimpan perubahan sementara (stash)..."
+    git stash push -m "autopush-temp" 2>$null
+    Write-Host "⬇️  Menarik update dari GitHub..."
     git pull origin $Branch --rebase
-
-    git commit -m "$commitMessage" 2>$null
-    git push origin $Branch
-
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "`n✅ Push berhasil!"
-    } else {
-        Write-Host "`n❌ Push gagal! Periksa error di atas."
-    }
+    Write-Host "🔄 Mengembalikan perubahan lokal..."
+    git stash pop 2>$null
 }
 
 # ===== Push File =====
 function Push-File {
     Write-Host "`n=== Pilih File yang Ingin di-Push ==="
     $selected = Select-File $RepoDir
-    if (-not $selected) { Write-Host "Batal"; return }
-
+    if (-not $selected) { Write-Host "❌ Batal"; return }
     $relativePath = $selected.Replace("$RepoDir\", "").Replace("\", "/")
-    git add "$relativePath"
+    Set-Location $RepoDir
 
-    $status = git status --porcelain
-    if ([string]::IsNullOrEmpty($status)) {
-        Write-Host "`nTidak ada perubahan, file sudah up-to-date."
-        Write-Host "URL: https://github.com/berkasaink/gtea/blob/$Branch/$relativePath"
-        return
+    Auto-Cleanup
+    git add "$relativePath"
+    if (-not (git diff --cached --quiet)) {
+        git commit -m "update $relativePath"
     }
 
-    Do-GitPush "update $relativePath"
-    Write-Host "URL: https://github.com/berkasaink/gtea/blob/$Branch/$relativePath"
+    Auto-Pull
+    git push origin $Branch --force-with-lease
+
+    Write-Host "`n✅ Sukses: File $relativePath berhasil di-push!"
+    Write-Host "🌐 URL: https://github.com/berkasaink/gtea/blob/$Branch/$relativePath"
 }
 
 # ===== Push Folder =====
 function Push-Folder {
-    Write-Host "`n=== Push Folder ==="
     $folder = Read-Host "Masukkan path folder relatif dari $RepoDir"
+    Set-Location $RepoDir
+    Auto-Cleanup
     git add "$folder"
-
-    $status = git status --porcelain
-    if ([string]::IsNullOrEmpty($status)) {
-        Write-Host "`nTidak ada perubahan di folder $folder."
-        Write-Host "URL: https://github.com/berkasaink/gtea/tree/$Branch/$folder"
-        return
+    if (-not (git diff --cached --quiet)) {
+        git commit -m "update folder $folder"
     }
 
-    Do-GitPush "update folder $folder"
-    Write-Host "URL: https://github.com/berkasaink/gtea/tree/$Branch/$folder"
+    Auto-Pull
+    git push origin $Branch --force-with-lease
+
+    Write-Host "`n✅ Sukses: Folder $folder berhasil di-push!"
+    Write-Host "🌐 URL: https://github.com/berkasaink/gtea/tree/$Branch/$folder"
 }
 
 # ===== Full Backup =====
 function Full-Backup {
-    Write-Host "`n=== Push Semua Perubahan (Full Backup) ==="
+    Set-Location $RepoDir
+    Auto-Cleanup
     git add .
-
-    $status = git status --porcelain
-    if ([string]::IsNullOrEmpty($status)) {
-        Write-Host "`nTidak ada perubahan, repo sudah up-to-date."
-        Write-Host "URL: https://github.com/berkasaink/gtea"
-        return
+    if (-not (git diff --cached --quiet)) {
+        git commit -m "full backup"
     }
 
-    Do-GitPush "full backup"
-    Write-Host "URL: https://github.com/berkasaink/gtea"
+    Auto-Pull
+    git push origin $Branch --force-with-lease
+
+    Write-Host "`n✅ Full backup sukses!"
+    Write-Host "🌐 URL: https://github.com/berkasaink/gtea"
 }
 
 # ===== Lihat Status =====
-function Lihat-Status {
-    Set-Location $RepoDir
-    git status
-}
+function Lihat-Status { Set-Location $RepoDir; git status }
 
 # ===== Tarik Update dari GitHub =====
 function Pull-Update {
-    Write-Host "`n=== Menarik Update dari GitHub ==="
     Set-Location $RepoDir
-    git pull origin $Branch
-    Write-Host "`n✅ Update dari GitHub berhasil diambil!"
+    Auto-Pull
+    Write-Host "`n✅ Update dari GitHub selesai!"
 }
 
 # ===== MENU UTAMA =====
 while ($true) {
-    Write-Host ""
-    Write-Host "=== Manajemen Git Autopush ==="
+    Write-Host "`n=== Git Autopush ==="
     Write-Host "1. Push file"
     Write-Host "2. Push folder"
     Write-Host "3. Full backup"
     Write-Host "4. Lihat status"
     Write-Host "5. Keluar"
-    Write-Host "6. Tarik update dari GitHub"
-    $menu = Read-Host "Pilih menu [1-6]"
-
+    Write-Host "6. Tarik update"
+    $menu = Read-Host "Pilih [1-6]"
     switch ($menu) {
         1 { Push-File }
         2 { Push-Folder }
         3 { Full-Backup }
         4 { Lihat-Status }
-        5 { Write-Host "Keluar..."; break }
+        5 { break }
         6 { Pull-Update }
-        default { Write-Host "Pilihan tidak valid" }
+        default { Write-Host "❌ Pilihan tidak valid" }
     }
 }

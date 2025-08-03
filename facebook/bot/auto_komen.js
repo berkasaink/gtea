@@ -8,7 +8,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const logPath = path.resolve(__dirname, '../logs/auto_komen.log');
 
-// === Log aman ===
+// =============================
+// 🔹 Load Log agar tidak komentar ganda
+// =============================
 let logData = [];
 if (fs.existsSync(logPath)) {
   try {
@@ -34,6 +36,9 @@ function saveLog(id) {
 function isLogged(id) { return logData.includes(id); }
 const delay = ms => new Promise(res => setTimeout(res, ms));
 
+// =============================
+// 🔹 Fungsi utama Auto Comment
+// =============================
 export async function autoComment(page, browser = null) {
   console.log('[WAIT] Scrolling batch 1...');
 
@@ -68,10 +73,9 @@ export async function autoComment(page, browser = null) {
 
       console.log(`🎯 [${batch}-${i + 1}] ${text.slice(0, 60).replace(/\n/g, ' ')}...`);
 
-      // ✅ Ambil komentar AI
+      // ✅ Ambil komentar dari AI
       const comment = await getAIComment(text);
 
-      // ✅ Jika error AI (HTTP 400), skip tanpa log tambahan
       if (!comment || comment.startsWith('[AI_ERROR_400]')) {
         console.log(`⏭️ [${batch}-${i + 1}] AI gagal generate komentar`);
         continue;
@@ -148,7 +152,6 @@ export async function autoComment(page, browser = null) {
     }
   }
 
-  // ✅ Exit behavior hanya jika browser ada
   if (browser) {
     console.log(success ? '✅ Semua komentar selesai. Menutup browser...' : '⚠️ Tidak ada komentar yang terkirim. Menutup browser...');
     await browser.close();

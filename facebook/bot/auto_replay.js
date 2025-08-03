@@ -2,6 +2,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import crypto from "crypto";
+import { launchBrowser } from "../modules/browser.js";
 import { getAIComment } from "../modules/openai.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -14,100 +15,106 @@ const saveLog = id => { if (!logData.includes(id)) { logData.push(id); if (logDa
 const isLogged = id => logData.includes(id);
 const delay = ms => new Promise(res => setTimeout(res, ms));
 
-export async function autoReplay(page, browser = null) {
-  console.log("👤 Nama akun login terdeteksi: ME");
-  console.log("[WAIT] Membuka notifikasi Facebook...");
+export async function autoReplay(page = null, browser = null) {
+  let localBrowser = null;
 
-  await page.goto("https://www.facebook.com/notifications", { waitUntil: "networkidle2" });
-  await delay(5000);
+  try {
+    // ✅ Jika tidak ada browser dari luar → buka sendiri
+    if (!page || !browser) {
+      const launched = await launchBrowser();
+      page = launched.page;
+      localBrowser = launched.browser;
+    }
 
-  let targetURL = null;
-  let targetUser = null;
+    console.log("👤 Nama akun login terdeteksi: ME");
+    console.log("[WAIT] Membuka notifikasi Facebook...");
+    await page.goto("https://www.facebook.com/notifications", { waitUntil: "networkidle2" });
+    await delay(5000);
 
-  // ✅ Scroll notifikasi hingga 10x
-  for (let i = 1; i <= 10; i++) {
-    console.log(`[WAIT] Scrolling notifikasi... (${i}/10)`);
+    let targetURL = null;
+    let targetUser = null;
 
-    const notifElements = await page.$$eval("a[href*='comment_id']", els =>
-      els.map(el => ({ text: el.innerText, href: el.href }))
+    // ✅ Scroll notifikasi hingga 10x
+    for (let i = 1; i <= 10; i++) {
+      console.log(`[WAIT] Scrolling notifikasi... (${i}/10)`);
+
+      const notifElements = await page.$$eval("a[href*='comment_id']", els =>
+        els.map(el => ({ text: el.innerText, href: el.href }))
+      );
+
+      for (const notif of notifElements) {
+        const match = notif.text.match(/([A-Za-z0-9 ._-]+)\s+(?:menyebut|menandai)\s+anda/i);
+        if (match) {
+          targetUser = match[1].trim();
+          targetURL = notif.href;
+          break;
+        }
+      }
+      if (targetURL) break;
+
+      await page.evaluate(() => window.scrollBy(0, window.innerHeight));
+      await delay(3000);
+    }
+
+    if (!targetURL) {
+      console.log("⚠️ Tidak ada mention ditemukan.");
+      return false;
+    }
+
+    console.log(`🎯 Target mention dari: ${targetUser}`);
+    console.log(`🌐 URL: ${targetURL}`);
+
+    // ✅ Buka halaman target
+    await page.goto(targetURL, { waitUntil: "networkidle2" });
+    await delay(5000);
+
+    // ✅ Ambil semua komentar
+    const comments = await page.$$eval("div[aria-label='Komentar']", els =>
+      els.map(e => ({
+        html: e.innerHTML,
+        user: e.querySelector("strong")?.innerText || "",
+        text: e.innerText || ""
+      }))
     );
 
-    for (const notif of notifElements) {
-      const match = notif.text.match(/([A-Za-z0-9 ._-]+)\s+(?:menyebut|menandai)\s+anda/i);
-      if (match) {
-        targetUser = match[1].trim();
-        targetURL = notif.href;
-        break;
-      }
+    fs.writeFileSync(dumpPath, comments.map(c => `<p><b>${c.user}</b>: ${c.html}</p>`).join("\n"), "utf-8");
+    console.log(`📝 Dump HTML komentar ke ${dumpPath}`);
+    console.log(`📌 Semua komentar terdeteksi: ${comments.length}`);
+
+    // ✅ Filter komentar terbaru dari targetUser yang mention kita
+    const filtered = comments.filter(c =>
+      c.user.toLowerCase().includes(targetUser.toLowerCase()) &&
+      /@?ME|href="\/me/i.test(c.html)
+    );
+
+    if (!filtered.length) {
+      console.log("⏭️ Tidak ada komentar target yang mention ME.");
+      return false;
     }
-    if (targetURL) break;
 
-    await page.evaluate(() => window.scrollBy(0, window.innerHeight));
-    await delay(3000);
-  }
+    const latest = filtered[filtered.length - 1];
+    const commentID = crypto.createHash("sha1").update(latest.text).digest("hex");
+    if (isLogged(commentID)) {
+      console.log("⏭️ Komentar ini sudah dibalas sebelumnya.");
+      return false;
+    }
 
-  if (!targetURL) {
-    console.log("⚠️ Tidak ada mention ditemukan.");
-    if (browser) await browser.close();
-    return false;
-  }
+    console.log(`💬 Komentar terbaru dari ${targetUser}: "${latest.text}"`);
 
-  console.log(`🎯 Target mention dari: ${targetUser}`);
-  console.log(`🌐 URL: ${targetURL}`);
+    // ✅ Ambil balasan AI
+    const replyText = await getAIComment(latest.text);
+    if (!replyText || replyText.startsWith("[AI_ERROR")) {
+      console.log("❌ Gagal mendapatkan balasan AI.");
+      return false;
+    }
+    console.log(`🤖 Balasan AI: ${replyText}`);
 
-  // ✅ Buka halaman target
-  await page.goto(targetURL, { waitUntil: "networkidle2" });
-  await delay(5000);
-
-  // ✅ Ambil semua komentar dengan innerHTML
-  const comments = await page.$$eval("div[aria-label='Komentar']", els =>
-    els.map(e => ({
-      html: e.innerHTML,
-      user: e.querySelector("strong")?.innerText || "",
-      text: e.innerText || ""
-    }))
-  );
-
-  // 🔥 Dump semua komentar ke file untuk debug
-  fs.writeFileSync(dumpPath, comments.map(c => `<p><b>${c.user}</b>: ${c.html}</p>`).join("\n"), "utf-8");
-  console.log(`📝 Dump HTML komentar ke ${dumpPath}`);
-  console.log(`📌 Semua komentar terdeteksi: ${comments.length}`);
-
-  // ✅ Filter hanya komentar targetUser yang mention "ME"
-  const filtered = comments.filter(c =>
-    c.user.toLowerCase().includes(targetUser.toLowerCase()) &&
-    /@?ME|href="\/me/i.test(c.html) // deteksi mention
-  );
-
-  if (!filtered.length) {
-    console.log("⏭️ Tidak ada komentar target yang mention ME.");
-    return false;
-  }
-
-  // ✅ Ambil komentar terakhir
-  const latest = filtered[filtered.length - 1];
-  const commentID = crypto.createHash("sha1").update(latest.text).digest("hex");
-
-  if (isLogged(commentID)) {
-    console.log("⏭️ Komentar ini sudah dibalas sebelumnya.");
-    return false;
-  }
-
-  console.log(`💬 Komentar terbaru dari ${targetUser}: "${latest.text}"`);
-
-  // ✅ Ambil balasan AI
-  const replyText = await getAIComment(latest.text);
-  if (!replyText || replyText.startsWith("[AI_ERROR")) {
-    console.log("❌ Gagal mendapatkan balasan AI.");
-    return false;
-  }
-  console.log(`🤖 Balasan AI: ${replyText}`);
-
-  // ✅ Klik tombol balas
-  try {
+    // ✅ Klik tombol balas
     const btnReply = await page.$x("//span[contains(text(),'Balas')]");
-    if (btnReply.length > 0) await btnReply[0].click();
-    await delay(2000);
+    if (btnReply.length > 0) {
+      await btnReply[0].click();
+      await delay(2000);
+    }
 
     const inputBox = await page.$("div[contenteditable='true']");
     if (!inputBox) {
@@ -126,9 +133,10 @@ export async function autoReplay(page, browser = null) {
     return true;
 
   } catch (err) {
-    console.log(`❌ ERROR kirim balasan: ${err.message}`);
+    console.log(`❌ ERROR auto_replay: ${err.message}`);
     return false;
   } finally {
-    if (browser) await browser.close();
+    if (localBrowser) await localBrowser.close();
+    else if (browser) await browser.close();
   }
 }

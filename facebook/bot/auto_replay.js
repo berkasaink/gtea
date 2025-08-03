@@ -29,12 +29,12 @@ export async function autoReplay(page, browser) {
     await page.evaluate(() => window.scrollBy(0, window.innerHeight));
     await delay(2000);
 
-    // Ambil semua link notifikasi yang menuju komentar
-    const notifLinks = await page.$$eval('a[href*="comment_id"][href*="reply_comment_id"]', as =>
+    // Ambil semua notifikasi komentar
+    const notifLinks = await page.$$eval('a[href*="comment_id"]', as =>
       as.map(a => ({
         href: a.href,
-        user: a.innerText.split(' ')[0] || 'Unknown',
-        fullText: a.innerText
+        user: (a.querySelector('strong')?.innerText || a.innerText.split(' ')[0] || 'Belum').trim(),
+        fullText: a.innerText.trim()
       }))
     );
 
@@ -42,54 +42,52 @@ export async function autoReplay(page, browser) {
       const notifId = crypto.createHash('sha1').update(notif.href).digest('hex');
       if (isLogged(notifId)) { console.log('⏭️ Sudah dibalas sebelumnya.'); continue; }
 
-      // Ambil nama user dari notifikasi
       let targetUser = notif.user;
       const match = notif.fullText.match(/^(.+?) menyebut anda/);
       if (match) targetUser = match[1];
       console.log(`🎯 Target mention dari: ${targetUser}`);
       console.log(`🌐 URL: ${notif.href}`);
 
-      // Buka halaman komentar
       await page.goto(notif.href, { waitUntil: 'networkidle2', timeout: 0 });
-      await delay(4000);
+      await delay(5000);
 
-      // Scroll untuk memuat semua komentar
+      // Scroll semua komentar
       for (let i = 0; i < 6; i++) {
         await page.evaluate(() => window.scrollBy(0, window.innerHeight));
-        await delay(1000);
+        await delay(1500);
       }
 
-      // Dump HTML untuk debugging
       fs.writeFileSync('./logs/comments_dump.html', await page.content());
       console.log('📝 Dump HTML komentar ke logs/comments_dump.html');
 
-      // Ambil semua komentar di halaman
-      const comments = await page.$$eval('div[role="article"], ul li[role="article"]', nodes =>
-        nodes.map(n => ({
+      // Ambil semua komentar dengan fallback regex
+      const comments = await page.$$eval('div[aria-label][role="article"], div[role="article"]', nodes =>
+        nodes.map((n, i) => ({
+          idx: i + 1,
           user: (n.querySelector('h3 a, strong a, span a')?.innerText || '').trim(),
-          text: (n.querySelector('div[dir="auto"] span')?.innerText || '').trim(),
-          xpathIndex: Array.from(n.parentNode.children).indexOf(n) + 1 // untuk pilih via XPath
+          text: (n.querySelector('div[dir="auto"] span')?.innerText || '').trim()
         }))
       );
 
-      // Filter komentar dari target user
-      const targetComments = comments.filter(c => c.user.toLowerCase().includes(targetUser.toLowerCase()) && c.text);
+      // Debug semua user komentar
+      console.log('📌 Semua komentar terdeteksi:', comments.map(c => `${c.user}: ${c.text}`).slice(-10));
+
+      const targetComments = comments.filter(c => c.user && c.text && c.user.toLowerCase().includes(targetUser.toLowerCase()));
       if (!targetComments.length) { console.log('⏭️ Tidak ada komentar dari target user ditemukan.'); continue; }
 
-      // Ambil komentar terbaru (elemen paling akhir)
       const lastComment = targetComments[targetComments.length - 1];
       console.log(`💬 Komentar terbaru dari ${lastComment.user}: "${lastComment.text}"`);
 
-      // Klik tombol Balas pada komentar terbaru
-      const replyXPath = `(//div[role="article"])[${lastComment.xpathIndex}]//span[contains(text(),'Balas')]`;
+      // Klik tombol Balas via XPath
+      const replyXPath = `(//div[role="article"])[${lastComment.idx}]//span[contains(text(),'Balas')]`;
       const [replyBtn] = await page.$x(replyXPath);
       if (!replyBtn) { console.log('❌ Tombol Balas tidak ditemukan.'); continue; }
 
       await replyBtn.click();
       console.log('✅ Klik tombol Balas sukses.');
-      await delay(1500);
+      await delay(1200);
 
-      // Ketik balasan
+      // Cari kolom input balas
       const replyBox = await page.$('div[contenteditable="true"][role="textbox"]');
       if (!replyBox) { console.log('❌ Kolom input balas tidak muncul.'); continue; }
 

@@ -48,7 +48,7 @@ export async function getAIComment(postText) {
         body: JSON.stringify({
           model: "gpt-4o-mini", // ✅ gunakan model OpenAI resmi
           messages: [
-            { role: "system", content: "anda bertindak sebagai nama lina, jawab singkat dan tidak menawarkan bantuan, tambah variasi emoticon, tanpa tanda kutip" },
+            { role: "system", content: "anda bertindak sebagai nama lina, jawab komentar secara singkat, tidak menawarkan bantuan, tambah variasi emoticon, tanpa tanda kutip dan tidak mengulang kata kata yang sama" },
             { role: "user", content: postText.slice(0, 500) }
           ],
           max_tokens: 100

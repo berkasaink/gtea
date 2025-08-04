@@ -11,14 +11,17 @@ const logPath = path.resolve(__dirname, "../logs/auto_replay.log");
 const dumpPath = path.resolve(__dirname, "../logs/comments_dump.html");
 
 let logData = fs.existsSync(logPath) ? JSON.parse(fs.readFileSync(logPath, "utf-8") || "[]") : [];
-const saveLog = id => { 
-  if (!logData.includes(id)) { 
-    logData.push(id); 
-    if (logData.length > 2000) logData = logData.slice(-2000); 
-    fs.writeFileSync(logPath, JSON.stringify(logData, null, 2)); 
-  } 
+
+// ✅ Simpan log (URL + ID Komentar)
+const saveLog = (url, id) => {
+  if (!logData.find(e => e.url === url && e.id === id)) {
+    logData.push({ url, id });
+    if (logData.length > 2000) logData = logData.slice(-2000);
+    fs.writeFileSync(logPath, JSON.stringify(logData, null, 2));
+  }
 };
-const isLogged = id => logData.includes(id);
+const isLogged = (url, id) => logData.some(e => e.url === url && e.id === id);
+
 const delay = ms => new Promise(res => setTimeout(res, ms));
 
 export async function autoReplay(page = null, browser = null) {
@@ -57,7 +60,18 @@ export async function autoReplay(page = null, browser = null) {
       for (const n of notifs) {
         const raw = n.html.replace(/<[^>]+>/g, " ");
         const m = raw.match(/([A-Za-z0-9 ._-]+)\s+(?:menyebut|menandai|membalas|mengomentari)/i);
-        if (m) { targetUser = m[1].trim(); targetURL = n.href; break; }
+        if (m) {
+          targetUser = m[1].trim();
+          targetURL = n.href;
+
+          // ✅ Anti-spam: Skip jika URL sudah dibalas
+          if (logData.find(e => e.url === targetURL)) {
+            console.log(`⏭️ URL sudah dibalas sebelumnya, lewati: ${targetURL}`);
+            targetURL = null;
+            continue;
+          }
+          break;
+        }
       }
       if (targetURL) break;
       await page.evaluate(() => window.scrollBy(0, document.body.scrollHeight));
@@ -65,7 +79,7 @@ export async function autoReplay(page = null, browser = null) {
     }
 
     if (!targetURL) {
-      console.log("⚠️ Tidak ada notifikasi ditemukan.");
+      console.log("⚠️ Tidak ada notifikasi baru yang valid.");
       return false;
     }
 
@@ -89,38 +103,50 @@ export async function autoReplay(page = null, browser = null) {
     fs.writeFileSync(dumpPath, comments.map(c => `<p><b>${c.user}</b>: ${c.html}</p>`).join("\n"), "utf-8");
     console.log(`📌 Semua komentar terdeteksi: ${comments.length}`);
 
-    // ✅ Deteksi komentar target user lain
-    let targetComment = comments.find(c =>
-      c.user && c.user.toLowerCase() !== loginName.toLowerCase()
-    );
+    // ✅ Pilih komentar target user lain
+    let targetComment = comments.find(c => c.user && c.user.toLowerCase() !== loginName.toLowerCase());
 
-    // ✅ Smart fallback: jika hanya ada 1 komentar & user !== loginName
     if (!targetComment && comments.length === 1 && comments[0].user.toLowerCase() !== loginName.toLowerCase()) {
       targetComment = comments[0];
-      console.log("⚠️ Fallback: hanya ada 1 komentar, gunakan komentar ini.");
+      console.log("⚠️ Fallback: hanya ada 1 komentar (bukan milik login), gunakan komentar ini.");
     }
 
     if (!targetComment) {
-      console.log("⏭️ Tidak ada komentar valid yang bisa dibalas (user target tidak ditemukan).");
+      console.log("⏭️ Tidak ada komentar valid yang bisa dibalas.");
       return false;
     }
 
     console.log(`💬 Komentar target dari ${targetComment.user}: "${targetComment.text}"`);
+
+    // ✅ Hash komentar untuk anti-spam ID
     const commentID = crypto.createHash("sha1").update(targetComment.text).digest("hex");
-    if (isLogged(commentID)) {
+    if (isLogged(targetURL, commentID)) {
       console.log("⏭️ Komentar ini sudah dibalas sebelumnya (anti-spam aktif).");
       return false;
     }
 
-    // ✅ Ambil balasan AI
-    const replyText = await getAIComment(targetComment.text);
+    // ✅ Deteksi apakah komentar adalah stiker/emoticon
+    const match = targetComment.html.match(/<img[^>]+alt="([^"]+)"/i);
+    const isSticker = /stiker|sticker/i.test(targetComment.text) || !!match;
+
+    // ✅ Jika stiker → kirim prompt khusus ke AI
+    let replyText;
+    if (isSticker) {
+      const altEmoji = match ? match[1] : "😊";
+      console.log(`🎨 Deteksi komentar stiker dengan emoji: ${altEmoji}`);
+      replyText = await getAIComment(`Balas komentar dengan nada ramah dan kreatif. Komentar ini adalah stiker dengan emoji: ${altEmoji}. 
+Buat balasan unik, gunakan variasi bahasa, dan jangan gunakan kalimat yang sama setiap kali.`);
+    } else {
+      replyText = await getAIComment(targetComment.text);
+    }
+
     if (!replyText || replyText.startsWith("[AI_ERROR")) {
       console.log("❌ Gagal mendapatkan balasan AI.");
       return false;
     }
     console.log(`🤖 Balasan AI: ${replyText}`);
 
-    // ✅ Klik tombol Balas (hanya tombol yang teksnya "Balas")
+    // ✅ Klik tombol Balas (hanya yang teksnya "Balas")
     const buttons = await page.$$("div[role='article'] div[role='button']");
     let clicked = false;
     for (let i = 0; i < buttons.length; i++) {
@@ -152,7 +178,7 @@ export async function autoReplay(page = null, browser = null) {
     await delay(3000);
 
     console.log("✅ Balasan berhasil dikirim!");
-    saveLog(commentID);
+    saveLog(targetURL, commentID);
     return true;
 
   } catch (err) {

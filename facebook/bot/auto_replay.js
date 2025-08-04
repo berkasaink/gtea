@@ -24,7 +24,7 @@ export async function autoReplay(page = null, browser = null) {
       localBrowser = launched.browser;
     }
 
-    // ✅ 1. Deteksi nama login
+    // ✅ 1. Deteksi nama akun login
     await page.goto("https://www.facebook.com/", { waitUntil: "domcontentloaded" });
     await delay(3000);
     let loginName = await page.evaluate(() => {
@@ -33,14 +33,14 @@ export async function autoReplay(page = null, browser = null) {
     });
     console.log(`👤 Nama akun login terdeteksi: ${loginName}`);
 
-    // ✅ 2. Buka notifikasi
+    // ✅ 2. Buka halaman notifikasi
     console.log("[WAIT] Membuka notifikasi...");
     await page.goto("https://www.facebook.com/notifications", { waitUntil: "networkidle2" });
     await delay(4000);
 
     let targetURL = null, targetUser = null;
 
-    // ✅ 3. Scroll notifikasi cari mention / reply
+    // ✅ 3. Scroll notifikasi cari target mention / reply
     for (let i = 1; i <= 10; i++) {
       console.log(`[WAIT] Scrolling notifikasi... (${i}/10)`);
       const notifs = await page.$$eval("a[href*='comment_id']", els =>
@@ -57,7 +57,7 @@ export async function autoReplay(page = null, browser = null) {
     }
 
     if (!targetURL) {
-      console.log("⚠️ Tidak ada mention atau balasan yang cocok ditemukan.");
+      console.log("⚠️ Tidak ada mention atau balasan ditemukan.");
       return false;
     }
 
@@ -68,9 +68,10 @@ export async function autoReplay(page = null, browser = null) {
     await page.goto(targetURL, { waitUntil: "networkidle2" });
     await delay(5000);
 
-    // ✅ 5. Ambil semua komentar
+    // ✅ 5. Ambil semua komentar dengan data handle unik
     const comments = await page.$$eval("div[role='article']", els =>
-      els.map(e => ({
+      els.map((e, i) => ({
+        index: i,
         user: e.querySelector("span[dir='auto']")?.innerText || "",
         text: e.innerText,
         html: e.outerHTML
@@ -80,25 +81,26 @@ export async function autoReplay(page = null, browser = null) {
     fs.writeFileSync(dumpPath, comments.map(c => `<p><b>${c.user}</b>: ${c.html}</p>`).join("\n"), "utf-8");
     console.log(`📌 Semua komentar terdeteksi: ${comments.length}`);
 
-    // ✅ 6. Filter: komentar targetUser yang mention kita ATAU fallback semua komentar user itu
+    // ✅ 6. Filter: komentar hanya dari targetUser, bukan dari akun login
     const filtered = comments.filter(c =>
       c.user.toLowerCase().includes(targetUser.toLowerCase()) &&
-      (c.html.includes(loginName) || c.html.match(/href="[^"]+profile/i) || true) // fallback: user target selalu diambil
+      !c.user.toLowerCase().includes(loginName.toLowerCase()) &&
+      c.text.trim().length > 0
     );
 
     if (!filtered.length) {
-      console.log("⏭️ Tidak ada komentar target yang valid untuk dibalas.");
+      console.log("⏭️ Tidak ada komentar valid dari target user.");
       return false;
     }
 
     const latest = filtered[filtered.length - 1];
+    console.log(`💬 Komentar yang dipilih: [${latest.index}] ${latest.user}: "${latest.text}"`);
+
     const commentID = crypto.createHash("sha1").update(latest.text).digest("hex");
     if (isLogged(commentID)) {
       console.log("⏭️ Komentar ini sudah dibalas sebelumnya.");
       return false;
     }
-
-    console.log(`💬 Komentar terbaru dari ${targetUser}: "${latest.text}"`);
 
     // ✅ 7. Ambil balasan AI
     const replyText = await getAIComment(latest.text);
@@ -108,15 +110,15 @@ export async function autoReplay(page = null, browser = null) {
     }
     console.log(`🤖 Balasan AI: ${replyText}`);
 
-    // ✅ 8. Klik tombol Balas tepat di bawah komentar target
-    const btnReply = await page.$x(`//span[contains(text(),'Balas')]/ancestor::div[contains(@role,'button')]`);
-    if (btnReply.length > 0) {
-      await btnReply[0].click();
-      await delay(1500);
-    } else {
+    // ✅ 8. Klik tombol Balas spesifik pada komentar target (gunakan index ke-N)
+    const xpathBtn = `(//div[@role='article'])[${latest.index + 1}]//span[contains(text(),'Balas')]/ancestor::div[contains(@role,'button')]`;
+    const btns = await page.$x(xpathBtn);
+    if (btns.length === 0) {
       console.log("❌ Tombol Balas tidak ditemukan.");
       return false;
     }
+    await btns[0].click();
+    await delay(1500);
 
     // ✅ 9. Ketik balasan
     const inputBox = await page.$("div[contenteditable='true']");
@@ -126,7 +128,7 @@ export async function autoReplay(page = null, browser = null) {
     }
 
     await inputBox.focus();
-    await page.keyboard.type(replyText, { delay: 80 });
+    await page.keyboard.type(replyText, { delay: 70 });
     await delay(1500);
     await page.keyboard.press("Enter");
     await delay(3000);

@@ -1,4 +1,3 @@
-// auto_replay.js (Fix Debugging dengan Screenshot & Dump)
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -9,16 +8,12 @@ import { getAIComment } from "../modules/openai.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const logPath = path.resolve(__dirname, "../logs/auto_replay.log");
-const dumpNotif = path.resolve(__dirname, "../logs/notif_dump.html");
-const dumpComments = path.resolve(__dirname, "../logs/comments_dump.html");
-const dumpPage = path.resolve(__dirname, "../logs/page_dump.html");
-const ssNotif = path.resolve(__dirname, "../logs/notif_screenshot.png");
-const ssComment = path.resolve(__dirname, "../logs/comment_screenshot.png");
+const dumpPath = path.resolve(__dirname, "../logs/comments_dump.html");
 
 let logData = fs.existsSync(logPath) ? JSON.parse(fs.readFileSync(logPath, "utf-8") || "[]") : [];
 const saveLog = id => { if (!logData.includes(id)) { logData.push(id); if (logData.length > 2000) logData = logData.slice(-2000); fs.writeFileSync(logPath, JSON.stringify(logData, null, 2)); } };
 const isLogged = id => logData.includes(id);
-const delay = ms => new Promise(r => setTimeout(r, ms));
+const delay = ms => new Promise(res => setTimeout(res, ms));
 
 export async function autoReplay(page = null, browser = null) {
   let localBrowser = null;
@@ -29,29 +24,26 @@ export async function autoReplay(page = null, browser = null) {
       localBrowser = launched.browser;
     }
 
-    // ✅ 1. Deteksi nama login (pakai aria-label dan title sebagai fallback)
+    // ✅ 1. Deteksi nama akun login
     await page.goto("https://www.facebook.com/", { waitUntil: "domcontentloaded" });
     await delay(3000);
     let loginName = await page.evaluate(() => {
-      let name = document.querySelector('div[aria-label="Akun"] span')?.innerText
-        || document.querySelector('a[role="link"][tabindex="0"] span')?.innerText
-        || document.title || "ME";
-      return name.trim();
+      let el = document.querySelector('a[role="link"] span[dir="auto"]') || document.querySelector('span[dir="auto"]');
+      return el ? el.innerText.trim() : "ME";
     });
     console.log(`👤 Nama akun login terdeteksi: ${loginName}`);
 
-    // ✅ 2. Buka notifikasi
+    // ✅ 2. Buka halaman notifikasi
     console.log("[WAIT] Membuka notifikasi...");
     await page.goto("https://www.facebook.com/notifications", { waitUntil: "networkidle2" });
-    await delay(5000);
-    await page.screenshot({ path: ssNotif, fullPage: true });
-    fs.writeFileSync(dumpNotif, await page.content(), "utf-8");
+    await delay(4000);
 
-    // ✅ 3. Cari target mention di notifikasi
     let targetURL = null, targetUser = null;
+
+    // ✅ 3. Scroll & cari target mention
     for (let i = 1; i <= 10; i++) {
       console.log(`[WAIT] Scrolling notifikasi... (${i}/10)`);
-      const notifs = await page.evaluate(() => Array.from(document.querySelectorAll("a[href*='comment_id']")).map(a => ({ text: a.innerText, href: a.href })));
+      const notifs = await page.$$eval("a[href*='comment_id']", els => els.map(a => ({ text: a.innerText, href: a.href })));
       for (const n of notifs) {
         const m = n.text.match(/(.+?)\s+(?:menyebut|menandai|membalas)\s+anda/i);
         if (m) { targetUser = m[1].trim(); targetURL = n.href; break; }
@@ -60,33 +52,85 @@ export async function autoReplay(page = null, browser = null) {
       await page.evaluate(() => window.scrollBy(0, document.body.scrollHeight));
       await delay(2000);
     }
-    if (!targetURL) { console.log("⚠️ Tidak ada mention ditemukan."); return false; }
+
+    if (!targetURL) {
+      console.log("⚠️ Tidak ada mention ditemukan.");
+      return false;
+    }
 
     console.log(`🎯 Target mention dari: ${targetUser}`);
     console.log(`🌐 URL Target: ${targetURL}`);
 
-    // ✅ 4. Buka halaman komentar
+    // ✅ 4. Buka halaman komentar target
     await page.goto(targetURL, { waitUntil: "networkidle2" });
-    await delay(6000);
-    await page.screenshot({ path: ssComment, fullPage: true });
-    fs.writeFileSync(dumpPage, await page.content(), "utf-8");
+    await delay(5000);
 
-    // ✅ 5. Ambil semua komentar (log semua, tanpa filter)
-    const comments = await page.evaluate(() => {
-      return Array.from(document.querySelectorAll("div[role='article']")).map(div => ({
-        user: div.querySelector("strong, h3")?.innerText || "",
-        text: div.innerText,
-        html: div.outerHTML
-      }));
-    });
-    fs.writeFileSync(dumpComments, comments.map(c => `<p><b>${c.user}</b>: ${c.html}</p>`).join("\n"), "utf-8");
+    // ✅ 5. Ambil semua komentar
+    const comments = await page.$$eval("div[role='article']", els =>
+      els.map(e => ({
+        user: e.querySelector("span[dir='auto']")?.innerText || "",
+        text: e.innerText,
+        html: e.outerHTML
+      }))
+    );
+
+    fs.writeFileSync(dumpPath, comments.map(c => `<p><b>${c.user}</b>: ${c.html}</p>`).join("\n"), "utf-8");
     console.log(`📌 Semua komentar terdeteksi: ${comments.length}`);
 
-    // ✅ 6. (Sementara) tidak filter mention → hanya log
-    for (const c of comments) console.log(`- ${c.user}: ${c.text.substring(0, 50)}...`);
+    // ✅ 6. Filter komentar terbaru dari target user yang mention akun kita
+    const filtered = comments.filter(c =>
+      c.user.toLowerCase().includes(targetUser.toLowerCase()) &&
+      (c.html.includes(`/profile.php`) || c.html.includes(loginName))
+    );
 
-    console.log("✅ Debug mode selesai. Kirim file logs/page_dump.html & screenshot ke saya untuk analisa lanjut.");
-    return false;
+    if (!filtered.length) {
+      console.log("⏭️ Tidak ada komentar target yang mention akun kita.");
+      return false;
+    }
+
+    const latest = filtered[filtered.length - 1];
+    const commentID = crypto.createHash("sha1").update(latest.text).digest("hex");
+    if (isLogged(commentID)) {
+      console.log("⏭️ Komentar ini sudah dibalas sebelumnya.");
+      return false;
+    }
+
+    console.log(`💬 Komentar terbaru dari ${targetUser}: "${latest.text}"`);
+
+    // ✅ 7. Ambil balasan AI
+    const replyText = await getAIComment(latest.text);
+    if (!replyText || replyText.startsWith("[AI_ERROR")) {
+      console.log("❌ Gagal mendapatkan balasan AI.");
+      return false;
+    }
+    console.log(`🤖 Balasan AI: ${replyText}`);
+
+    // ✅ 8. Klik tombol Balas
+    const btnReply = await page.$x("//span[contains(text(),'Balas')]");
+    if (btnReply.length > 0) {
+      await btnReply[0].click();
+      await delay(1500);
+    } else {
+      console.log("❌ Tombol Balas tidak ditemukan.");
+      return false;
+    }
+
+    // ✅ 9. Ketik balasan
+    const inputBox = await page.$("div[contenteditable='true']");
+    if (!inputBox) {
+      console.log("❌ Kolom balasan tidak ditemukan.");
+      return false;
+    }
+
+    await inputBox.focus();
+    await page.keyboard.type(replyText, { delay: 80 });
+    await delay(1500);
+    await page.keyboard.press("Enter");
+    await delay(3000);
+
+    console.log("✅ Balasan berhasil dikirim!");
+    saveLog(commentID);
+    return true;
 
   } catch (err) {
     console.log(`❌ ERROR auto_replay: ${err.message}`);

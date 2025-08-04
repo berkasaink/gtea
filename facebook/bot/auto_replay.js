@@ -24,7 +24,7 @@ export async function autoReplay(page = null, browser = null) {
       localBrowser = launched.browser;
     }
 
-    // ✅ 1. Deteksi nama akun login
+    // ✅ 1. Deteksi nama login
     await page.goto("https://www.facebook.com/", { waitUntil: "domcontentloaded" });
     await delay(3000);
     let loginName = await page.evaluate(() => {
@@ -33,19 +33,22 @@ export async function autoReplay(page = null, browser = null) {
     });
     console.log(`👤 Nama akun login terdeteksi: ${loginName}`);
 
-    // ✅ 2. Buka halaman notifikasi
+    // ✅ 2. Buka notifikasi
     console.log("[WAIT] Membuka notifikasi...");
     await page.goto("https://www.facebook.com/notifications", { waitUntil: "networkidle2" });
     await delay(4000);
 
     let targetURL = null, targetUser = null;
 
-    // ✅ 3. Scroll & cari target mention
+    // ✅ 3. Scroll notifikasi cari mention / reply
     for (let i = 1; i <= 10; i++) {
       console.log(`[WAIT] Scrolling notifikasi... (${i}/10)`);
-      const notifs = await page.$$eval("a[href*='comment_id']", els => els.map(a => ({ text: a.innerText, href: a.href })));
+      const notifs = await page.$$eval("a[href*='comment_id']", els =>
+        els.map(a => ({ text: a.innerText, href: a.href }))
+      );
+
       for (const n of notifs) {
-        const m = n.text.match(/(.+?)\s+(?:menyebut|menandai|membalas)\s+anda/i);
+        const m = n.text.match(/(.+?)\s+(?:menyebut|menandai|membalas)\s+komentar anda/i);
         if (m) { targetUser = m[1].trim(); targetURL = n.href; break; }
       }
       if (targetURL) break;
@@ -54,11 +57,11 @@ export async function autoReplay(page = null, browser = null) {
     }
 
     if (!targetURL) {
-      console.log("⚠️ Tidak ada mention ditemukan.");
+      console.log("⚠️ Tidak ada mention atau balasan yang cocok ditemukan.");
       return false;
     }
 
-    console.log(`🎯 Target mention dari: ${targetUser}`);
+    console.log(`🎯 Target dari: ${targetUser}`);
     console.log(`🌐 URL Target: ${targetURL}`);
 
     // ✅ 4. Buka halaman komentar target
@@ -77,14 +80,14 @@ export async function autoReplay(page = null, browser = null) {
     fs.writeFileSync(dumpPath, comments.map(c => `<p><b>${c.user}</b>: ${c.html}</p>`).join("\n"), "utf-8");
     console.log(`📌 Semua komentar terdeteksi: ${comments.length}`);
 
-    // ✅ 6. Filter komentar terbaru dari target user yang mention akun kita
+    // ✅ 6. Filter: komentar targetUser yang mention kita ATAU fallback semua komentar user itu
     const filtered = comments.filter(c =>
       c.user.toLowerCase().includes(targetUser.toLowerCase()) &&
-      (c.html.includes(`/profile.php`) || c.html.includes(loginName))
+      (c.html.includes(loginName) || c.html.match(/href="[^"]+profile/i) || true) // fallback: user target selalu diambil
     );
 
     if (!filtered.length) {
-      console.log("⏭️ Tidak ada komentar target yang mention akun kita.");
+      console.log("⏭️ Tidak ada komentar target yang valid untuk dibalas.");
       return false;
     }
 
@@ -105,8 +108,8 @@ export async function autoReplay(page = null, browser = null) {
     }
     console.log(`🤖 Balasan AI: ${replyText}`);
 
-    // ✅ 8. Klik tombol Balas
-    const btnReply = await page.$x("//span[contains(text(),'Balas')]");
+    // ✅ 8. Klik tombol Balas tepat di bawah komentar target
+    const btnReply = await page.$x(`//span[contains(text(),'Balas')]/ancestor::div[contains(@role,'button')]`);
     if (btnReply.length > 0) {
       await btnReply[0].click();
       await delay(1500);
